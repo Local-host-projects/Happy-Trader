@@ -1,7 +1,8 @@
 <?php
 
 return [
-    'api_key'  => env('OPENROUTER_API_KEY'),
-    'endpoint' => 'https://openrouter.ai/api/v1/chat/completions',
-    'model'    => env('AI_MODEL', 'deepseek/deepseek-v4-flash:free'),
+    'api_key'  => env('ANTHROPIC_API_KEY'),
+    'endpoint' => 'https://api.anthropic.com/v1/messages',
+    'model'    => env('AI_MODEL', 'claude-sonnet-4-6'),
+    'version'  => '2023-06-01',
 ];

@@ -10,18 +10,14 @@ class AiService
     public function reviewCrtParameters(array $context): array
     {
         $response = Http::withHeaders([
-            'Authorization' => 'Bearer ' . config('ai.api_key'),
-            'Content-Type'  => 'application/json',
-            'HTTP-Referer'  => config('app.url'),   // optional — shows app on OpenRouter leaderboard
-            'X-Title'       => 'Apex CRT Bot',       // optional
+            'x-api-key'         => config('ai.api_key'),
+            'anthropic-version' => config('ai.version'),
+            'content-type'      => 'application/json',
         ])->timeout(60)->post(config('ai.endpoint'), [
             'model'      => config('ai.model'),
             'max_tokens' => 1024,
+            'system'     => $this->systemPrompt(),
             'messages'   => [
-                [
-                    'role'    => 'system',
-                    'content' => $this->systemPrompt(),
-                ],
                 [
                     'role'    => 'user',
                     'content' => json_encode($context, JSON_PRETTY_PRINT),
@@ -31,16 +27,16 @@ class AiService
 
         if ($response->failed()) {
             throw new RuntimeException(
-                'OpenRouter API error [' . $response->status() . ']: ' . $response->body()
+                'Anthropic API error [' . $response->status() . ']: ' . $response->body()
             );
         }
 
-        // OpenRouter uses OpenAI-compatible response format
-        $text = $response->json('choices.0.message.content');
+        // Anthropic returns content as an array of blocks
+        $text = $response->json('content.0.text');
 
         if (! $text) {
             throw new RuntimeException(
-                'OpenRouter returned empty content. Full response: ' . $response->body()
+                'Anthropic returned empty content. Full response: ' . $response->body()
             );
         }
 
