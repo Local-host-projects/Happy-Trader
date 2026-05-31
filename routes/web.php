@@ -1,10 +1,11 @@
 <?php
 
+use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\TradeController;
+use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ParameterController;
-use App\Http\Controllers\TradeController;
-use Illuminate\Support\Facades\Route;
 
 Route::middleware('guest')->group(function () {
     Route::get('/login',    [AuthController::class, 'showLogin'])->name('login');
@@ -28,3 +29,10 @@ Route::middleware('auth')->group(function () {
     Route::get('/data/snapshots', [DashboardController::class, 'snapshots'])->name('data.snapshots');
     Route::get('/data/trades',    [TradeController::class, 'data'])->name('data.trades');
 });
+// Add inside the auth middleware group
+Route::get('/data/balance',   [DashboardController::class, 'balance'])->name('data.balance');
+Route::get('/data/accounts',  [ProfileController::class, 'accounts'])->name('data.accounts');
+
+Route::get('/settings',                [ProfileController::class, 'index'])->name('settings');
+Route::post('/settings/api-key',       [ProfileController::class, 'updateApiKey'])->name('settings.api-key');
+Route::post('/settings/switch-account',[ProfileController::class, 'switchAccount'])->name('settings.switch-account');

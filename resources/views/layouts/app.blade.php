@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="csrf-token" content="{{ csrf_token() }}">
-<title>@yield('title', 'Dashboard') — Apex</title>
+<title>@yield('title', 'Dashboard') — Happy</title>
 
 <script src="https://cdn.tailwindcss.com"></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -79,7 +79,7 @@ body::after {
                 <i class="fa-solid fa-chart-line text-black text-sm"></i>
             </div>
             <div>
-                <h1 class="font-serif font-bold text-lg tracking-tight leading-none">Apex</h1>
+                <h1 class="font-serif font-bold text-lg tracking-tight leading-none">Happy</h1>
                 <p class="text-[10px] font-mono text-white/30 tracking-widest uppercase mt-0.5">CRT · V25</p>
             </div>
         </div>
@@ -101,6 +101,11 @@ body::after {
            class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all
                   {{ request()->routeIs('parameters') ? 'bg-white text-black' : 'text-white/50 hover:text-white hover:bg-white/[0.06]' }}">
             <i class="fa-solid fa-sliders w-4 text-center"></i> Parameters
+        </a>
+        <a href="{{ route('settings') }}"
+        class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all
+                {{ request()->routeIs('settings') ? 'bg-white text-black' : 'text-white/50 hover:text-white hover:bg-white/[0.06]' }}">
+            <i class="fa-solid fa-gear w-4 text-center"></i> Settings
         </a>
     </nav>
 
@@ -184,13 +189,10 @@ body::after {
         <span class="text-[9px] font-mono tracking-wider uppercase">Params</span>
     </a>
 
-    <form method="POST" action="{{ route('logout') }}" id="logout-form-mobile">
-        @csrf
-        <button type="submit" class="flex flex-col items-center gap-1 text-white/30 hover:text-white/60 transition-colors">
-            <i class="fa-solid fa-right-from-bracket text-lg"></i>
-            <span class="text-[9px] font-mono tracking-wider uppercase">Out</span>
-        </button>
-    </form>
+    <a href="{{ route('settings') }}" class="flex flex-col items-center gap-1 {{ request()->routeIs('settings') ? 'text-white' : 'text-white/30' }} transition-colors">
+        <i class="fa-solid fa-gear text-lg"></i>
+        <span class="text-[9px] font-mono tracking-wider uppercase">Settings</span>
+    </a>
 
 </nav>
 

@@ -26,6 +26,33 @@
     </div>
     @endforeach
 </div>
+{{-- Wallet Balance --}}
+<div class="glass border border-white/[0.07] rounded-2xl px-5 py-4 mb-5 flex items-center justify-between flex-wrap gap-4">
+    <div class="flex items-center gap-4">
+        <div class="w-10 h-10 rounded-xl bg-white/[0.06] border border-white/[0.08] flex items-center justify-center shrink-0">
+            <i class="fa-solid fa-wallet text-white/50"></i>
+        </div>
+        <div>
+            <p class="text-[9px] font-mono text-white/25 tracking-widest uppercase mb-1">Deriv Wallet Balance</p>
+            <div class="flex items-baseline gap-2">
+                <span class="font-serif text-2xl font-bold" id="wallet-balance">—</span>
+                <span class="text-xs font-mono text-white/30" id="wallet-currency">USD</span>
+            </div>
+            <p class="text-[10px] font-mono text-white/20 mt-0.5" id="wallet-account">Account: —</p>
+        </div>
+    </div>
+    <div class="flex items-center gap-3">
+        <span class="text-[9px] font-mono px-2 py-1 rounded-full border border-white/[0.08] text-white/30" id="wallet-source"></span>
+        <button onclick="refreshBalance()"
+            class="flex items-center gap-2 text-xs font-mono text-white/30 hover:text-white border border-white/[0.08] hover:border-white/20 px-3 py-1.5 rounded-xl transition-all">
+            <i class="fa-solid fa-rotate-right" id="refresh-icon"></i> Refresh
+        </button>
+        <a href="{{ route('settings') }}"
+            class="text-[10px] font-mono text-white/25 hover:text-white/60 transition-colors">
+            Switch account →
+        </a>
+    </div>
+</div>
 
 {{-- Bot control + Chart --}}
 <div class="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-4 mb-5">
@@ -240,5 +267,27 @@ async function loadChart() {
 loadStats();
 loadChart();
 setInterval(loadStats, 30000);
+// Wallet balance
+async function refreshBalance() {
+    const icon = document.getElementById('refresh-icon');
+    icon.classList.add('animate-spin');
+
+    try {
+        const data = await fetch('{{ route("data.balance") }}').then(r => r.json());
+
+        document.getElementById('wallet-balance').textContent  = '$' + data.balance;
+        document.getElementById('wallet-currency').textContent = data.currency;
+        document.getElementById('wallet-account').textContent  = 'Account: ' + data.account_id + ' · ' + (data.account_type || '');
+        document.getElementById('wallet-source').textContent   = data.source === 'live' ? '● LIVE' : '○ CACHED';
+
+    } catch(e) {
+        document.getElementById('wallet-balance').textContent = 'Error';
+    } finally {
+        icon.classList.remove('animate-spin');
+    }
+}
+
+// Load balance on page load
+refreshBalance();
 </script>
 @endpush
