@@ -24,112 +24,75 @@ class CrtAnalyzer
     ) {}
 
     public function analyze(): ?array
-    {
-        // Need at least 16 candles: 14 for ATR + 1 reference + 1 forming
-        if (count($this->candles) < 16) {
-            return null;
-        }
+{
+    $mode = $this->params->strategy_mode ?? 'mean_reversion';
 
-        // Session filter — only trade active windows
-        if (! $this->isActiveSession()) {
-            return null;
-        }
+    if ($mode === 'skip') return null;
 
-        $this->atr = $this->calculateAtr(14);
+    if (count($this->candles) < 16) return null;
 
-        if ($this->atr == 0) {
-            return null;
-        }
+    // REMOVED: isActiveSession() — let it trade every 4H mark including 00:00
 
-        $count   = count($this->candles);
-        $ref     = $this->candles[$count - 2]; // last completed candle
-        $current = $this->candles[$count - 1]; // currently forming candle
+    $this->atr = $this->calculateAtr(14);
+    if ($this->atr == 0) return null;
 
-        $refHigh      = (float) $ref['high'];
-        $refLow       = (float) $ref['low'];
-        $range        = $refHigh - $refLow;
-        $bodySize     = abs((float) $ref['open'] - (float) $ref['close']);
-        $bodyRatio    = $range > 0 ? ($bodySize / $range) * 100 : 0;
-        $currentPrice = (float) $current['close'];
+    ['high' => $refHigh, 'low' => $refLow, 'epoch' => $refEpoch, 'body_ratio' => $bodyRatio]
+        = $this->getReferenceRange();
 
-        // ── Range quality filters ──────────────────────────────────────────
+    $range = $refHigh - $refLow;
 
-        $minRange = ($this->params->min_range_atr_pct / 100) * $this->atr;
-        $maxRange = ($this->params->max_range_atr_pct / 100) * $this->atr;
+    // Widened range filter — very permissive
+    $minRange = ($this->params->min_range_atr_pct / 100) * $this->atr;
+    $maxRange = ($this->params->max_range_atr_pct / 100) * $this->atr;
+    if ($range < $minRange || $range > $maxRange) return null;
 
-        if ($range < $minRange || $range > $maxRange) {
-            return null;
-        }
+    // LOWERED: body ratio — now 20% minimum instead of 30%
+    $minBodyRatio = (float) ($this->params->min_body_ratio ?? 20.0);
+    if ($bodyRatio < $minBodyRatio) return null;
 
-        // Reject doji / indecision candles — no clear structure to fade
-        if ($bodyRatio < 30) {
-            return null;
-        }
+    $count        = count($this->candles);
+    $currentPrice = (float) $this->candles[$count - 1]['close'];
+    $midpoint     = ($refHigh + $refLow) / 2;
 
-        // ADX filter (optional)
-        if ($this->params->adx_min_threshold !== null) {
-            if ($this->calculateAdx(14) < (float) $this->params->adx_min_threshold) {
-                return null;
-            }
-        }
-
-        // ── Zone detection — the core CRT mean-reversion logic ────────────
-        //
-        // Upper zone: price in the top ZONE_THRESHOLD of the range → SELL
-        //   Price has tagged the peak, expect reversion down to the low
-        //
-        // Lower zone: price in the bottom ZONE_THRESHOLD of the range → BUY
-        //   Price has tagged the dip, expect reversion up to the high
-        //
-        // Dead zone (middle): no setup, price has no clear directional bias
-
-        $upperZoneLine = $refLow + ($range * (1 - self::ZONE_THRESHOLD)); // e.g. 70% level
-        $lowerZoneLine = $refLow + ($range * self::ZONE_THRESHOLD);        // e.g. 30% level
-
-        if ($currentPrice >= $upperZoneLine) {
-            $direction   = 'sell';
-            $slPrice     = $refHigh + ($this->atr * (float) $this->params->sl_atr_multiplier);
-            $tpPrice     = $refLow;  // target: opposite extreme (the dip)
-        } elseif ($currentPrice <= $lowerZoneLine) {
-            $direction   = 'buy';
-            $slPrice     = $refLow - ($this->atr * (float) $this->params->sl_atr_multiplier);
-            $tpPrice     = $refHigh; // target: opposite extreme (the peak)
-        } else {
-            return null; // price in dead zone — no setup
-        }
-
-        // ── R:R check ─────────────────────────────────────────────────────
-
-        $tpDistance = abs($currentPrice - $tpPrice);
-        $slDistance = abs($currentPrice - $slPrice);
-
-        if ($slDistance == 0) {
-            return null;
-        }
-
-        $rrRatio = $tpDistance / $slDistance;
-
-        // Require at least 1:1 before entering
-        if ($rrRatio < 1.0) {
-            return null;
-        }
-
-        return [
-            'direction'          => $direction,
-            'atr'                => $this->atr,
-            'range'              => $range,
-            'body_ratio'         => $bodyRatio,
-            'ref_high'           => $refHigh,
-            'ref_low'            => $refLow,
-            'ref_candle_open_at' => (int) $ref['epoch'],
-            'current_price'      => $currentPrice,
-            'sl_price'           => $slPrice,
-            'tp1_price'          => $tpPrice,
-            'sl_distance'        => $slDistance,
-            'tp1_distance'       => $tpDistance,
-            'rr_ratio'           => $rrRatio,
-        ];
+    // Direction always determined — price is always above or below mid
+    // This guarantees a setup every cycle
+    if ($currentPrice >= $midpoint) {
+        $direction = 'sell';
+        $slPrice   = $refHigh + ($this->atr * (float) $this->params->sl_atr_multiplier);
+        $tpPrice   = $refLow;
+    } else {
+        $direction = 'buy';
+        $slPrice   = $refLow - ($this->atr * (float) $this->params->sl_atr_multiplier);
+        $tpPrice   = $refHigh;
     }
+
+    $tpDistance = abs($currentPrice - $tpPrice);
+    $slDistance = abs($currentPrice - $slPrice);
+
+    if ($slDistance == 0) return null;
+
+    $rrRatio = $tpDistance / $slDistance;
+
+    // LOWERED: minimum R:R from 1.0 to 0.7
+    $minRR = (float) ($this->params->min_rr_ratio ?? 0.7);
+    if ($rrRatio < $minRR) return null;
+
+    return [
+        'direction'          => $direction,
+        'atr'                => $this->atr,
+        'body_ratio'         => $bodyRatio,
+        'ref_high'           => $refHigh,
+        'ref_low'            => $refLow,
+        'ref_candle_open_at' => $refEpoch,
+        'current_price'      => $currentPrice,
+        'sl_price'           => $slPrice,
+        'tp1_price'          => $tpPrice,
+        'sl_distance'        => $slDistance,
+        'tp1_distance'       => $tpDistance,
+        'rr_ratio'           => $rrRatio,
+        'strategy_mode'      => $this->params->strategy_mode,
+    ];
+}
 
     // ── Session filter ────────────────────────────────────────────────────
 
