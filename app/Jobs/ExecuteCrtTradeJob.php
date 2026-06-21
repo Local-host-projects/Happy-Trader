@@ -4,12 +4,12 @@ namespace App\Jobs;
 
 use Carbon\Carbon;
 use App\Models\User;
-use App\Models\TradeLog;
+use App\Models\TradeLogs;
 use App\Services\CrtAnalyzer;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
 use App\Services\DerivService;
-use App\Models\AccountSnapshot;
+use App\Models\AccountSnapshots;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Queue\InteractsWithQueue;

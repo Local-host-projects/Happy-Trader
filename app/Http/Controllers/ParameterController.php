@@ -17,7 +17,7 @@ class ParameterController extends Controller
 
     public function update(Request $request)
     {
-
+        dd($request);
         $data = $request->validate([
             'risk_percent'          => ['sometimes', 'numeric', 'min:0.1', 'max:5'],
             'sl_atr_multiplier'     => ['sometimes', 'numeric', 'min:1.0', 'max:5'],
@@ -32,7 +32,7 @@ class ParameterController extends Controller
             'daily_loss_limit_pct'  => ['sometimes', 'numeric', 'min:0.5', 'max:20'],
             'zone_threshold'        => ['sometimes', 'numeric', 'min:0.150', 'max:0.450'],
         ]);
-        dd($data);
+
 
         $params = Auth::user()->parameters;
         $params->fill($data);
