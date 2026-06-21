@@ -100,18 +100,21 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
             $tp1Amount = round($stake * $setup['rr_ratio'], 2);
 
             // Step 7: Get proposal
-            $contractType = $setup['direction'] === 'buy' ? 'MULTUP' : 'MULTDOWN';
+           // Step 7: Get proposal
+$contractType = $setup['direction'] === 'buy' ? 'MULTUP' : 'MULTDOWN';
 
-           $proposal = $service->getProposal([
+$proposal = $service->getProposal([
+    'proposal'          => 1, // Required: Top-level API request identifier
     'amount'            => $stake,
-    'basis'             => 'stake',
+    'basis'             => 'stake', // Correct for Multipliers
     'contract_type'     => $contractType,
     'currency'          => $balance['currency'],
     'underlying_symbol' => config('deriv.symbol'),
-    'multiplier'        => config('deriv.multiplier', 100),
+    'multiplier'        => (int) config('deriv.multiplier', 100), // Ensure integer type
+    'duration_unit'     => 's', // Required by Deriv for multiplier proposals
     'limit_order'       => [
-        'stop_loss'   => $stake,
-        'take_profit' => $tp1Amount,
+        'stop_loss'   => (float) $stake,
+        'take_profit' => (float) $tp1Amount,
     ],
 ]);
 
