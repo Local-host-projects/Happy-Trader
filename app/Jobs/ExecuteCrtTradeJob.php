@@ -102,20 +102,18 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
             // Step 7: Get proposal
             $contractType = $setup['direction'] === 'buy' ? 'MULTUP' : 'MULTDOWN';
 
-            $proposal = $service->getProposal([
-                'amount'            => $stake,
-                'basis'             => 'stake',
-                'contract_type'     => $contractType,
-                'currency'          => $balance['currency'],
-                'duration'          => 8,
-                'duration_unit'     => 'h',
-                'underlying_symbol' => config('deriv.symbol'),
-                'multiplier'        => config('deriv.multiplier', 1),
-                'limit_order'       => [
-                    'stop_loss'   => $stake,      // lose at most the full stake
-                    'take_profit' => $tp1Amount,  // take profit at R:R target
-                ],
-            ]);
+           $proposal = $service->getProposal([
+    'amount'            => $stake,
+    'basis'             => 'stake',
+    'contract_type'     => $contractType,
+    'currency'          => $balance['currency'],
+    'underlying_symbol' => config('deriv.symbol'),
+    'multiplier'        => config('deriv.multiplier', 100),
+    'limit_order'       => [
+        'stop_loss'   => $stake,
+        'take_profit' => $tp1Amount,
+    ],
+]);
 
             // Step 8: Buy the contract
             $buy = $service->buy($proposal['id'], (float) $proposal['ask_price']);
