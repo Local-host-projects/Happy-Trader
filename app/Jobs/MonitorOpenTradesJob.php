@@ -28,57 +28,53 @@ class MonitorOpenTradesJob implements ShouldQueue
     }
 
     private function checkTrade(TradeLogs $trade): void
-    {
-        $service = new DerivService($trade->user->deriv_api_key);
+{
+    $service = new DerivService(
+        $trade->user->deriv_api_key,
+        $trade->user->deriv_account_id,
+    );
 
-        try {
-            $service->connect();
-            $service->authorize();
+    try {
+        $service->connect();
 
-            $contract = $service->getOpenContract($trade->deriv_contract_id);
+        $contract = $service->getOpenContract($trade->deriv_contract_id);
 
-            // If status is still 'open', nothing to do
-            if (($contract['status'] ?? 'open') === 'open') {
-                return;
-            }
-
-            // Contract is settled — determine outcome
-            $profit     = (float) ($contract['profit'] ?? 0);
-            $sellPrice  = (float) ($contract['sell_price'] ?? $contract['current_spot'] ?? 0);
-            $status     = $this->resolveStatus($trade, $profit);
-
-            $trade->update([
-                'status'      => $status,
-                'close_price' => $sellPrice,
-                'pnl'         => $profit,
-                'closed_at'   => now(),
-            ]);
-
-            Log::info("CRT monitor: trade {$trade->id} closed", [
-                'status' => $status,
-                'pnl'    => $profit,
-            ]);
-
-        } catch (\Throwable $e) {
-            Log::error("CRT monitor: failed checking trade {$trade->id}: {$e->getMessage()}");
-        } finally {
-            $service->disconnect();
+        // is_sold: 0 = still open, 1 = closed
+        if (! ($contract['is_sold'] ?? 0)) {
+            return;
         }
+
+        // profit is a string in the API response — cast to float
+        $profit    = (float) ($contract['profit'] ?? 0);
+        $sellPrice = (float) ($contract['sell_price'] ?? 0);
+        $status    = $this->resolveStatus($profit);
+
+        $trade->update([
+            'status'      => $status,
+            'close_price' => $sellPrice ?: null,
+            'pnl'         => $profit,
+            'closed_at'   => now(),
+        ]);
+
+        Log::info("Monitor: trade {$trade->id} closed", [
+            'status'     => $status,
+            'pnl'        => $profit,
+            'sell_price' => $sellPrice,
+        ]);
+
+    } catch (\Throwable $e) {
+        Log::error("Monitor: failed checking trade {$trade->id}: {$e->getMessage()}");
+    } finally {
+        $service->disconnect();
     }
+}
 
-    private function resolveStatus(TradeLogs $trade, float $pnl): string
-    {
-        if ($pnl > 0) {
-            // Positive PnL — determine if it was TP1 or TP2
-            return $trade->tp2_price ? 'tp2' : 'tp1';
-        }
-
-        if ($pnl < 0) {
-            // Negative PnL — check if it was a near-breakeven close or SL
-            $slRisk = (float) $trade->lot_size;
-            return abs($pnl) < ($slRisk * 0.05) ? 'be' : 'sl';
-        }
-
-        return 'be';
-    }
+private function resolveStatus(float $pnl): string
+{
+    // For multipliers, Deriv marks all closed contracts as "sold"
+    // We determine outcome purely from the profit value
+    if ($pnl > 0)  return 'tp1';
+    if ($pnl < 0)  return 'sl';
+    return 'be';
+}
 }

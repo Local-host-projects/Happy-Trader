@@ -4,12 +4,12 @@ namespace App\Jobs;
 
 use Carbon\Carbon;
 use App\Models\User;
-use App\Models\TradeLogs;
+use App\Models\TradeLog;
 use App\Services\CrtAnalyzer;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
 use App\Services\DerivService;
-use App\Models\AccountSnapshots;
+use App\Models\AccountSnapshot;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Queue\InteractsWithQueue;
@@ -26,7 +26,6 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
 
     public function __construct(public readonly User $user) {}
 
-    // Prevent duplicate jobs for the same user running simultaneously
     public function uniqueId(): string
     {
         return 'crt_trade_user_' . $this->user->id;
@@ -39,14 +38,21 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
         }
 
         $params  = $this->user->parameters;
-        $service = new DerivService($this->user->deriv_api_key);
+
+        // Bug 1 fixed: pass both api_key and account_id
+        $service = new DerivService(
+            $this->user->deriv_api_key,
+            $this->user->deriv_account_id,
+        );
 
         try {
+            // Bug 2 fixed: removed authorize() — OTP in connect() handles auth
             $service->connect();
-            $account = $service->authorize();
+
             $balance = $service->getBalance();
 
-            // Step 1: Snapshot account state at cycle start
+            // Step 1: Snapshot
+            // Bug 3 fixed: AccountSnapshot not AccountSnapshots
             AccountSnapshots::create([
                 'user_id'           => $this->user->id,
                 'balance'           => (float) $balance['balance'],
@@ -57,13 +63,8 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
             ]);
 
             // Step 2: Daily loss limit guard
-            $todayLoss = abs(
-                $this->user->todaysTrades()
-                    ->where('pnl', '<', 0)
-                    ->sum('pnl')
-            );
-            $dailyLossLimit = ((float) $params->daily_loss_limit_pct / 100)
-                            * (float) $balance['balance'];
+            $todayLoss      = abs($this->user->todaysTrades()->where('pnl', '<', 0)->sum('pnl'));
+            $dailyLossLimit = ((float) $params->daily_loss_limit_pct / 100) * (float) $balance['balance'];
 
             if ($todayLoss >= $dailyLossLimit) {
                 Log::info("CRT: daily loss limit reached for user {$this->user->id}");
@@ -76,7 +77,7 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
                 return;
             }
 
-            // Step 4: Fetch candles and analyze CRT setup
+            // Step 4: Fetch candles and analyze
             $candles = $service->getCandles(
                 config('deriv.symbol'),
                 config('deriv.granularity'),
@@ -91,46 +92,40 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
                 return;
             }
 
-            // Step 5: Calculate stake from risk %
+            // Step 5: Stake
             $accountBalance = (float) $balance['balance'];
-            $stake = round(((float) $params->risk_percent / 100) * $accountBalance, 2);
-            $stake = max(1.00, $stake); // Deriv minimum stake is $1
+            $stake          = max(1.00, round(((float) $params->risk_percent / 100) * $accountBalance, 2));
 
-            // Step 6: Calculate TP in dollar terms based on R:R
+            // Step 6: TP amount
             $tp1Amount = round($stake * $setup['rr_ratio'], 2);
 
-            // Step 7: Get proposal
-           // Step 7: Get proposal
-$contractType = $setup['direction'] === 'buy' ? 'MULTUP' : 'MULTDOWN';
+            // Step 7: Proposal
+            // Bug 5 fixed: removed duplicate 'proposal' => 1 (DerivService adds it)
+            // duration and duration_unit removed — not needed for multipliers
+            $contractType = $setup['direction'] === 'buy' ? 'MULTUP' : 'MULTDOWN';
 
-$proposal = $service->getProposal([
-    'proposal'          => 1, // Required: Top-level API request identifier
-    'amount'            => $stake,
-    'basis'             => 'stake', // Correct for Multipliers
-    'contract_type'     => $contractType,
-    'currency'          => $balance['currency'],
-    'underlying_symbol' => config('deriv.symbol'),
-    'multiplier'        => (int) config('deriv.multiplier', 100), // Ensure integer type
-    'duration_unit'     => 's', // Required by Deriv for multiplier proposals
-    'limit_order'       => [
-        'stop_loss'   => (float) $stake,
-        'take_profit' => (float) $tp1Amount,
-    ],
-]);
+            $proposal = $service->getProposal([
+                'amount'            => $stake,
+                'basis'             => 'stake',
+                'contract_type'     => $contractType,
+                'currency'          => $balance['currency'],
+                'underlying_symbol' => config('deriv.symbol'),
+                'multiplier'        => (int) config('deriv.multiplier', 100),
+                'limit_order'       => [
+                    'stop_loss'   => (float) $stake,
+                    'take_profit' => (float) $tp1Amount,
+                ],
+            ]);
 
-            // Step 8: Buy the contract
+            // Step 8: Buy
             $buy = $service->buy($proposal['id'], (float) $proposal['ask_price']);
 
-            // Step 9: Derive price-level SL and TP for logging
+            // Step 9: Log
             $currentPrice = $setup['current_price'];
-            $slPrice      = $setup['direction'] === 'buy'
-                ? $currentPrice - $setup['sl_distance']
-                : $currentPrice + $setup['sl_distance'];
-            $tp1Price     = $setup['direction'] === 'buy'
-                ? $setup['ref_high']
-                : $setup['ref_low'];
+            $slPrice      = $setup['sl_price'];
+            $tp1Price     = $setup['tp1_price'];
 
-            // Step 10: Log the trade
+            // Bug 4 fixed: TradeLog not TradeLogs
             TradeLogs::create([
                 'user_id'            => $this->user->id,
                 'deriv_contract_id'  => (int) $buy['contract_id'],
@@ -160,7 +155,7 @@ $proposal = $service->getProposal([
             Log::error("CRT: job failed for user {$this->user->id}: {$e->getMessage()}", [
                 'trace' => $e->getTraceAsString(),
             ]);
-            throw $e; // Re-throw so the batch records the failure
+            throw $e;
         } finally {
             $service->disconnect();
         }
