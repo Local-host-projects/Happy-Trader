@@ -17,22 +17,23 @@ class ParameterController extends Controller
 
     public function update(Request $request)
     {
-        dd($request);
-        $data = $request->validate([
-            'risk_percent'          => ['sometimes', 'numeric', 'min:0.1', 'max:5'],
-            'sl_atr_multiplier'     => ['sometimes', 'numeric', 'min:1.0', 'max:5'],
-            'min_range_atr_pct'     => ['sometimes', 'numeric', 'min:10', 'max:200'],
-            'max_range_atr_pct'     => ['sometimes', 'numeric', 'min:50', 'max:500'],
-            'tp1_close_pct'         => ['sometimes', 'numeric', 'min:10', 'max:100'],
-            'tp2_atr_multiplier'    => ['sometimes', 'nullable', 'numeric', 'min:0.5', 'max:5'],
-            'trailing_atr_step'     => ['sometimes', 'nullable', 'numeric', 'min:0.1', 'max:3'],
-            'adx_min_threshold'     => ['sometimes', 'nullable', 'numeric', 'min:10', 'max:50'],
-            'trend_filter_enabled'  => ['sometimes', 'boolean'],
-            'max_concurrent_trades' => ['sometimes', 'integer', 'min:1', 'max:5'],
-            'daily_loss_limit_pct'  => ['sometimes', 'numeric', 'min:0.5', 'max:20'],
-            'zone_threshold'        => ['sometimes', 'numeric', 'min:0.150', 'max:0.450'],
-        ]);
 
+        $data = $request->validate([
+    'risk_percent'          => ['sometimes', 'numeric', 'min:0.1', 'max:5'],
+    'sl_atr_multiplier'     => ['sometimes', 'numeric', 'min:1', 'max:5'],
+    'min_range_atr_pct'     => ['sometimes', 'numeric', 'min:10', 'max:200'],
+    'max_range_atr_pct'     => ['sometimes', 'numeric', 'min:50', 'max:500'],
+
+    'tp1_close_pct'         => ['sometimes', 'numeric', 'min:10', 'max:100'],
+    'tp2_atr_multiplier'    => ['sometimes', 'nullable', 'numeric', 'min:0.5', 'max:5'],
+    'trailing_atr_step'     => ['sometimes', 'nullable', 'numeric', 'min:0.1', 'max:3'],
+    'adx_min_threshold'     => ['sometimes', 'nullable', 'numeric', 'min:10', 'max:50'],
+    'zone_threshold'        => ['sometimes', 'nullable', 'numeric', 'min:0.15', 'max:0.45'],
+
+    'trend_filter_enabled'  => ['sometimes', 'boolean'],
+    'max_concurrent_trades' => ['sometimes', 'integer', 'min:1', 'max:5'],
+    'daily_loss_limit_pct'  => ['sometimes', 'numeric', 'min:0.5', 'max:20'],
+]);
 
         $params = Auth::user()->parameters;
         $params->fill($data);
