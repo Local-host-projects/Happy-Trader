@@ -12,7 +12,7 @@
         <div class="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between">
             <p class="text-xs font-mono text-white/40 tracking-widest uppercase">Parameter Values</p>
             <span class="text-[10px] font-mono text-white/20">
-                Updated {{ $params->updated_at?->diffForHumans() ?? 'never' }}
+                Updated {{ $params->updated_at}}
             </span>
         </div>
 
