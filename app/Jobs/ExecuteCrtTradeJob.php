@@ -39,20 +39,37 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
 
         $params  = $this->user->parameters;
 
-        // Validate API key early — fail loudly and log
-        if (empty($this->user->deriv_api_key)) {
-            Log::error("CRT: missing deriv_api_key for user {$this->user->id}");
-            error_log("[CRT] missing deriv_api_key for user {$this->user->id}");
+        // Require either an API key or an OAuth token
+        if (empty($this->user->deriv_api_key) && empty($this->user->deriv_oauth_token)) {
+            Log::error("CRT: missing deriv_api_key and deriv_oauth_token for user {$this->user->id}");
+            error_log("[CRT] missing deriv credentials for user {$this->user->id}");
             return;
         }
 
-        // DerivService — legacy, 1 argument (now nullable but validated above)
-        $service = new DerivService($this->user->deriv_api_key);
+        // DerivService — create service (apiKey may be null when using OTP)
+        $service = new DerivService($this->user->deriv_api_key ?? null);
 
         try {
-            // Connect and authorize
-            $service->connect();
-            $service->authorize();
+            // Prefer OTP flow when we have an OAuth token and an account id
+            $usedOtp = false;
+            if (! empty($this->user->deriv_oauth_token) && ! empty($this->user->deriv_account_id)) {
+                try {
+                    $otpUrl = DerivService::requestOtpUrl($this->user->deriv_account_id, $this->user->deriv_oauth_token);
+                    $service->connectWithOtpUrl($otpUrl);
+                    $usedOtp = true;
+                    Log::info("CRT: using OTP connection for user {$this->user->id}");
+                    error_log("[CRT] using OTP connection for user {$this->user->id}");
+                } catch (\Throwable $e) {
+                    Log::warning("CRT: OTP connection failed for user {$this->user->id}: {$e->getMessage()}");
+                    error_log("[CRT] OTP connection failed for user {$this->user->id}: {$e->getMessage()}");
+                    // fallback to legacy authorize flow below
+                }
+            }
+
+            if (! $usedOtp) {
+                $service->connect();
+                $service->authorize();
+            }
 
             // Get balance
             $balance = $service->getBalance();
