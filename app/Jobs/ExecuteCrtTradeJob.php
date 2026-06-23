@@ -39,20 +39,18 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
 
         $params  = $this->user->parameters;
 
-        // Bug 1 fixed: pass both api_key and account_id
-        $service = new DerivService(
-            $this->user->deriv_api_key,
-            $this->user->deriv_account_id,
-        );
+        // DerivService — legacy, 1 argument
+        $service = new DerivService($this->user->deriv_api_key);
 
         try {
-            // Bug 2 fixed: removed authorize() — OTP in connect() handles auth
+            // Connect and authorize
             $service->connect();
+            $service->authorize();
 
+            // Get balance
             $balance = $service->getBalance();
 
             // Step 1: Snapshot
-            // Bug 3 fixed: AccountSnapshot not AccountSnapshots
             AccountSnapshots::create([
                 'user_id'           => $this->user->id,
                 'balance'           => (float) $balance['balance'],
@@ -62,28 +60,34 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
                 'captured_at'       => now(),
             ]);
 
-            // Step 2: Daily loss limit guard
-            $todayLoss      = abs($this->user->todaysTrades()->where('pnl', '<', 0)->sum('pnl'));
-            $dailyLossLimit = ((float) $params->daily_loss_limit_pct / 100) * (float) $balance['balance'];
+            // Step 2: Daily loss limit
+            $todayLoss = abs(
+                $this->user->todaysTrades()
+                    ->where('pnl', '<', 0)
+                    ->sum('pnl')
+            );
+            $dailyLossLimit = ((float)($params->daily_loss_limit_pct ?? 3) / 100)
+                            * (float) $balance['balance'];
 
             if ($todayLoss >= $dailyLossLimit) {
                 Log::info("CRT: daily loss limit reached for user {$this->user->id}");
                 return;
             }
 
-            // Step 3: Max concurrent trades guard
-            if ($this->user->openTrades()->count() >= (int) $params->max_concurrent_trades) {
+            // Step 3: Max concurrent trades
+            if ($this->user->openTrades()->count() >= (int)($params->max_concurrent_trades ?? 2)) {
                 Log::info("CRT: max concurrent trades reached for user {$this->user->id}");
                 return;
             }
 
-            // Step 4: Fetch candles and analyze
+            // Step 4: Candles — same connection is fine for legacy API
             $candles = $service->getCandles(
                 config('deriv.symbol'),
                 config('deriv.granularity'),
                 config('deriv.candle_count')
             );
 
+            // Step 5: Analyze
             $analyzer = new CrtAnalyzer($candles, $params);
             $setup    = $analyzer->analyze();
 
@@ -92,16 +96,16 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
                 return;
             }
 
-            // Step 5: Stake
-            $accountBalance = (float) $balance['balance'];
-            $stake          = max(1.00, round(((float) $params->risk_percent / 100) * $accountBalance, 2));
+            // Step 6: Stake
+            $balance_amount = (float) $balance['balance'];
+            $stake          = max(1.00, round(
+                ((float)($params->risk_percent ?? 1) / 100) * $balance_amount, 2
+            ));
 
-            // Step 6: TP amount
+            // Step 7: TP amount
             $tp1Amount = round($stake * $setup['rr_ratio'], 2);
 
-            // Step 7: Proposal
-            // Bug 5 fixed: removed duplicate 'proposal' => 1 (DerivService adds it)
-            // duration and duration_unit removed — not needed for multipliers
+            // Step 8: Proposal — no duration for multipliers
             $contractType = $setup['direction'] === 'buy' ? 'MULTUP' : 'MULTDOWN';
 
             $proposal = $service->getProposal([
@@ -117,23 +121,18 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
                 ],
             ]);
 
-            // Step 8: Buy
+            // Step 9: Buy
             $buy = $service->buy($proposal['id'], (float) $proposal['ask_price']);
 
-            // Step 9: Log
-            $currentPrice = $setup['current_price'];
-            $slPrice      = $setup['sl_price'];
-            $tp1Price     = $setup['tp1_price'];
-
-            // Bug 4 fixed: TradeLog not TradeLogs
+            // Step 10: Log
             TradeLogs::create([
                 'user_id'            => $this->user->id,
                 'deriv_contract_id'  => (int) $buy['contract_id'],
                 'direction'          => $setup['direction'],
                 'lot_size'           => $stake,
-                'entry_price'        => $currentPrice,
-                'sl_price'           => round($slPrice, 5),
-                'tp1_price'          => round($tp1Price, 5),
+                'entry_price'        => $setup['current_price'],
+                'sl_price'           => round($setup['sl_price'], 5),
+                'tp1_price'          => round($setup['tp1_price'], 5),
                 'tp2_price'          => null,
                 'status'             => 'open',
                 'ref_candle_open_at' => Carbon::createFromTimestamp($setup['ref_candle_open_at']),
