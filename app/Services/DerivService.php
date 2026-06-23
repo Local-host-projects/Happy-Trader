@@ -132,6 +132,17 @@ class DerivService
         return $response->json('data') ?? [];
     }
 
+    // ── Auth ────────────────────────────────────────────────────────────
+
+    public function authorize(): array
+    {
+        if (empty($this->apiKey)) {
+            throw new RuntimeException('Missing Deriv API key for authorize call.');
+        }
+
+        return $this->send(['authorize' => $this->apiKey])['authorize'];
+    }
+
     // ── WebSocket send/receive ────────────────────────────────────────────
 
     private function send(array $payload): array
