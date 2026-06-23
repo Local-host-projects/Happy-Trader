@@ -30,8 +30,7 @@ class MonitorOpenTradesJob implements ShouldQueue
     private function checkTrade(TradeLogs $trade): void
 {
     $service = new DerivService(
-        $trade->user->deriv_api_key,
-        $trade->user->deriv_account_id,
+        $trade->user->deriv_api_key
     );
 
     try {
