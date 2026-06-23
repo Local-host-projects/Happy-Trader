@@ -4,6 +4,7 @@ namespace App\Services;
 
 use RuntimeException;
 use WebSocket\Client;
+use WebSocket\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -19,12 +20,20 @@ class DerivService
     {
         $appId = config('deriv.app_id');
         $endpoint = rtrim(config('deriv.endpoint', 'wss://ws.binaryws.com/websockets/v3'), '/');
+        $origin = config('deriv.ws_origin', 'https://deriv.com');
 
         $url = "{$endpoint}?app_id={$appId}";
 
+        $opts = [
+            'timeout' => 30,
+            'headers' => [
+                'Origin' => $origin,
+            ],
+        ];
+
         $this->client = new Client(
             $url,
-            ['timeout' => 30]
+            $opts
         );
     }
 
@@ -33,11 +42,19 @@ class DerivService
         // Public endpoint — market data only, no auth needed
         $appId = config('deriv.app_id');
         $endpoint = rtrim(config('deriv.endpoint', 'wss://ws.binaryws.com/websockets/v3'), '/');
+        $origin = config('deriv.ws_origin', 'https://deriv.com');
         $url = "{$endpoint}?app_id={$appId}";
+
+        $opts = [
+            'timeout' => 30,
+            'headers' => [
+                'Origin' => $origin,
+            ],
+        ];
 
         $this->client = new Client(
             $url,
-            ['timeout' => 30]
+            $opts
         );
     }
 
@@ -86,16 +103,36 @@ class DerivService
 
     private function send(array $payload): array
     {
-        $this->client->text(json_encode($payload));
-        $raw      = $this->client->receive();
+        try {
+            $this->client->text(json_encode($payload));
+            $raw = $this->client->receive();
+        } catch (ConnectionException $e) {
+            // Specific websocket connection failures
+            Log::error('DerivService: WebSocket connection error: ' . $e->getMessage());
+            error_log('[DerivService] WebSocket connection error: ' . $e->getMessage());
+            throw $e;
+        } catch (\Throwable $e) {
+            Log::error('DerivService: unexpected error during send/receive: ' . $e->getMessage());
+            error_log('[DerivService] unexpected send/receive error: ' . $e->getMessage());
+            throw $e;
+        }
 
         // Log raw response to both laravel log and stderr for easy debugging
         Log::debug('Deriv WS RAW RESPONSE: ' . $raw);
         error_log('[DerivService] RAW RESPONSE: ' . $raw);
 
+        // If the server returned an HTTP/HTML page (e.g. proxy error) it'll start with '<'
+        if (is_string($raw) && str_starts_with(trim($raw), '<')) {
+            Log::error('DerivService: received non-WS response (likely HTTP HTML).', ['raw' => substr($raw, 0, 512)]);
+            error_log('[DerivService] received non-WS response (likely HTTP HTML): ' . substr($raw, 0, 512));
+            throw new RuntimeException('Deriv WS returned unexpected non-WS response.');
+        }
+
         $response = json_decode($raw, true);
 
         if (json_last_error() !== JSON_ERROR_NONE) {
+            Log::error('DerivService: non-JSON response from WS', ['raw' => $raw]);
+            error_log('[DerivService] non-JSON response from WS: ' . $raw);
             throw new RuntimeException('Deriv WS returned non-JSON.');
         }
 
