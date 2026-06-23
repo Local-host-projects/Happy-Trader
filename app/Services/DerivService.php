@@ -37,6 +37,19 @@ class DerivService
         );
     }
 
+    /**
+     * Connect directly to a websocket URL obtained via OTP.
+     * The OTP URL already contains authentication and should be used immediately.
+     */
+    public function connectWithOtpUrl(string $otpUrl): void
+    {
+        $opts = [
+            'timeout' => 30,
+        ];
+
+        $this->client = new Client($otpUrl, $opts);
+    }
+
     public function connectPublic(): void
     {
         // Public endpoint — market data only, no auth needed
@@ -69,15 +82,35 @@ class DerivService
         }
     }
 
-    // ── Auth ────────────────────────────────────────────────────────────
+    // ── OTP helper (HTTP) ─────────────────────────────────────────────────
 
-    public function authorize(): array
+    /**
+     * Request an OTP-based websocket URL for the given options account.
+     * Returns the "wss://...otp=..." URL that can be connected to directly.
+     * Requires a bearer token with `trade` scope.
+     */
+    public static function requestOtpUrl(string $accountId, string $bearerToken): string
     {
-        if (empty($this->apiKey)) {
-            throw new RuntimeException('Missing Deriv API key for authorize call.');
+        $appId = config('deriv.app_id');
+
+        $resp = Http::withHeaders([
+            'Deriv-App-ID' => $appId,
+            'Authorization' => "Bearer {$bearerToken}",
+            'Content-Type' => 'application/json',
+        ])->post("https://api.derivws.com/trading/v1/options/accounts/{$accountId}/otp");
+
+        if ($resp->failed()) {
+            Log::error('DerivService: OTP request failed', ['status' => $resp->status(), 'body' => substr($resp->body(), 0, 512)]);
+            throw new RuntimeException("OTP request failed [{$resp->status()}]: {$resp->body()}");
         }
 
-        return $this->send(['authorize' => $this->apiKey])['authorize'];
+        $data = $resp->json('data');
+        if (!isset($data['url'])) {
+            Log::error('DerivService: OTP response missing url', ['body' => substr($resp->body(), 0, 1024)]);
+            throw new RuntimeException('OTP response missing url field');
+        }
+
+        return $data['url'];
     }
 
     // ── REST — fetch all accounts (used on registration) ─────────────────

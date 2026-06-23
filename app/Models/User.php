@@ -14,16 +14,19 @@ class User extends Authenticatable
         'email',
         'deriv_api_key',
         'deriv_account_id',
+        'deriv_oauth_token',
         'is_active',
         'trading_started_at',
     ];
 
     protected $hidden = [
         'deriv_api_key',
+        'deriv_oauth_token',
     ];
 
     protected $casts = [
         'deriv_api_key'      => 'encrypted',
+        'deriv_oauth_token'  => 'encrypted',
         'is_active'          => 'boolean',
         'trading_started_at' => 'datetime',
     ];
