@@ -56,6 +56,7 @@ class DerivService
         $appId = config('deriv.app_id');
         $endpoint = rtrim(config('deriv.endpoint', 'wss://ws.binaryws.com/websockets/v3'), '/');
         $origin = config('deriv.ws_origin', 'https://deriv.com');
+
         $url = "{$endpoint}?app_id={$appId}";
 
         $opts = [
@@ -100,13 +101,23 @@ class DerivService
         ])->post("https://api.derivws.com/trading/v1/options/accounts/{$accountId}/otp");
 
         if ($resp->failed()) {
-            Log::error('DerivService: OTP request failed', ['status' => $resp->status(), 'body' => substr($resp->body(), 0, 512)]);
-            throw new RuntimeException("OTP request failed [{$resp->status()}]: {$resp->body()}");
+            Log::error('DerivService: OTP request failed', [
+                'status' => $resp->status(),
+                'body' => substr($resp->body(), 0, 512),
+            ]);
+
+            throw new RuntimeException(
+                "OTP request failed [{$resp->status()}]: {$resp->body()}"
+            );
         }
 
         $data = $resp->json('data');
+
         if (!isset($data['url'])) {
-            Log::error('DerivService: OTP response missing url', ['body' => substr($resp->body(), 0, 1024)]);
+            Log::error('DerivService: OTP response missing url', [
+                'body' => substr($resp->body(), 0, 1024),
+            ]);
+
             throw new RuntimeException('OTP response missing url field');
         }
 
@@ -132,6 +143,21 @@ class DerivService
         return $response->json('data') ?? [];
     }
 
+    // ── Auth ────────────────────────────────────────────────────────────
+
+    public function authorize(): array
+    {
+        if (empty($this->apiKey)) {
+            throw new RuntimeException(
+                'Missing Deriv API key for authorize call.'
+            );
+        }
+
+        return $this->send([
+            'authorize' => $this->apiKey,
+        ])['authorize'];
+    }
+
     // ── WebSocket send/receive ────────────────────────────────────────────
 
     private function send(array $payload): array
@@ -141,12 +167,28 @@ class DerivService
             $raw = $this->client->receive();
         } catch (ConnectionException $e) {
             // Specific websocket connection failures
-            Log::error('DerivService: WebSocket connection error: ' . $e->getMessage());
-            error_log('[DerivService] WebSocket connection error: ' . $e->getMessage());
+            Log::error(
+                'DerivService: WebSocket connection error: ' .
+                $e->getMessage()
+            );
+
+            error_log(
+                '[DerivService] WebSocket connection error: ' .
+                $e->getMessage()
+            );
+
             throw $e;
         } catch (\Throwable $e) {
-            Log::error('DerivService: unexpected error during send/receive: ' . $e->getMessage());
-            error_log('[DerivService] unexpected send/receive error: ' . $e->getMessage());
+            Log::error(
+                'DerivService: unexpected error during send/receive: ' .
+                $e->getMessage()
+            );
+
+            error_log(
+                '[DerivService] unexpected send/receive error: ' .
+                $e->getMessage()
+            );
+
             throw $e;
         }
 
@@ -154,19 +196,37 @@ class DerivService
         Log::debug('Deriv WS RAW RESPONSE: ' . $raw);
         error_log('[DerivService] RAW RESPONSE: ' . $raw);
 
-        // If the server returned an HTTP/HTML page (e.g. proxy error) it'll start with '<'
+        // If the server returned an HTTP/HTML page (e.g. proxy error)
         if (is_string($raw) && str_starts_with(trim($raw), '<')) {
-            Log::error('DerivService: received non-WS response (likely HTTP HTML).', ['raw' => substr($raw, 0, 512)]);
-            error_log('[DerivService] received non-WS response (likely HTTP HTML): ' . substr($raw, 0, 512));
-            throw new RuntimeException('Deriv WS returned unexpected non-WS response.');
+            Log::error(
+                'DerivService: received non-WS response (likely HTTP HTML).',
+                ['raw' => substr($raw, 0, 512)]
+            );
+
+            error_log(
+                '[DerivService] received non-WS response (likely HTTP HTML): ' .
+                substr($raw, 0, 512)
+            );
+
+            throw new RuntimeException(
+                'Deriv WS returned unexpected non-WS response.'
+            );
         }
 
         $response = json_decode($raw, true);
 
         if (json_last_error() !== JSON_ERROR_NONE) {
-            Log::error('DerivService: non-JSON response from WS', ['raw' => $raw]);
-            error_log('[DerivService] non-JSON response from WS: ' . $raw);
-            throw new RuntimeException('Deriv WS returned non-JSON.');
+            Log::error('DerivService: non-JSON response from WS', [
+                'raw' => $raw,
+            ]);
+
+            error_log(
+                '[DerivService] non-JSON response from WS: ' . $raw
+            );
+
+            throw new RuntimeException(
+                'Deriv WS returned non-JSON.'
+            );
         }
 
         if (isset($response['error'])) {
@@ -180,8 +240,11 @@ class DerivService
 
     // ── Market data ───────────────────────────────────────────────────────
 
-    public function getCandles(string $symbol, int $granularity, int $count = 20): array
-    {
+    public function getCandles(
+        string $symbol,
+        int $granularity,
+        int $count = 20
+    ): array {
         return $this->send([
             'ticks_history' => $symbol,
             'end'           => 'latest',
@@ -195,7 +258,9 @@ class DerivService
 
     public function getBalance(): array
     {
-        return $this->send(['balance' => 1])['balance'];
+        return $this->send([
+            'balance' => 1,
+        ])['balance'];
     }
 
     // ── Trading ─────────────────────────────────────────────────────────
@@ -203,7 +268,10 @@ class DerivService
     public function getProposal(array $params): array
     {
         $resp = $this->send(
-            array_merge(['proposal' => 1], $params)
+            array_merge(
+                ['proposal' => 1],
+                $params
+            )
         );
 
         return $resp['proposal'];
