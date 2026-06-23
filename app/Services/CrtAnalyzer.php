@@ -4,6 +4,7 @@ namespace App\Services;
 
 use Carbon\Carbon;
 use App\Models\Parameters;
+use Illuminate\Support\Facades\Log;
 
 class CrtAnalyzer
 {
@@ -27,14 +28,26 @@ class CrtAnalyzer
 {
     $mode = $this->params->strategy_mode ?? 'mean_reversion';
 
-    if ($mode === 'skip') return null;
+    if ($mode === 'skip') {
+        Log::debug('CrtAnalyzer: skipping because strategy_mode=skip');
+        error_log('[CrtAnalyzer] skip mode');
+        return null;
+    }
 
-    if (count($this->candles) < 16) return null;
+    if (count($this->candles) < 16) {
+        Log::debug('CrtAnalyzer: insufficient candles', ['count' => count($this->candles)]);
+        error_log('[CrtAnalyzer] insufficient candles: ' . count($this->candles));
+        return null;
+    }
 
     // REMOVED: isActiveSession() — let it trade every 4H mark including 00:00
 
     $this->atr = $this->calculateAtr(14);
-    if ($this->atr == 0) return null;
+    if ($this->atr == 0) {
+        Log::debug('CrtAnalyzer: ATR == 0', ['atr' => $this->atr]);
+        error_log('[CrtAnalyzer] ATR == 0');
+        return null;
+    }
 
     ['high' => $refHigh, 'low' => $refLow, 'epoch' => $refEpoch, 'body_ratio' => $bodyRatio]
         = $this->getReferenceRange();
@@ -44,11 +57,19 @@ class CrtAnalyzer
     // Widened range filter — very permissive
     $minRange = ($this->params->min_range_atr_pct / 100) * $this->atr;
     $maxRange = ($this->params->max_range_atr_pct / 100) * $this->atr;
-    if ($range < $minRange || $range > $maxRange) return null;
+    if ($range < $minRange || $range > $maxRange) {
+        Log::debug('CrtAnalyzer: range out of bounds', ['range' => $range, 'min' => $minRange, 'max' => $maxRange]);
+        error_log('[CrtAnalyzer] range out of bounds');
+        return null;
+    }
 
     // LOWERED: body ratio — now 20% minimum instead of 30%
     $minBodyRatio = (float) ($this->params->min_body_ratio ?? 20.0);
-    if ($bodyRatio < $minBodyRatio) return null;
+    if ($bodyRatio < $minBodyRatio) {
+        Log::debug('CrtAnalyzer: bodyRatio too small', ['body_ratio' => $bodyRatio, 'min' => $minBodyRatio]);
+        error_log('[CrtAnalyzer] bodyRatio too small');
+        return null;
+    }
 
     $count        = count($this->candles);
     $currentPrice = (float) $this->candles[$count - 1]['close'];
@@ -69,13 +90,21 @@ class CrtAnalyzer
     $tpDistance = abs($currentPrice - $tpPrice);
     $slDistance = abs($currentPrice - $slPrice);
 
-    if ($slDistance == 0) return null;
+    if ($slDistance == 0) {
+        Log::debug('CrtAnalyzer: slDistance == 0');
+        error_log('[CrtAnalyzer] slDistance == 0');
+        return null;
+    }
 
     $rrRatio = $tpDistance / $slDistance;
 
     // LOWERED: minimum R:R from 1.0 to 0.7
     $minRR = (float) ($this->params->min_rr_ratio ?? 0.7);
-    if ($rrRatio < $minRR) return null;
+    if ($rrRatio < $minRR) {
+        Log::debug('CrtAnalyzer: rrRatio too low', ['rr' => $rrRatio, 'min' => $minRR]);
+        error_log('[CrtAnalyzer] rrRatio too low');
+        return null;
+    }
 
     return [
         'direction'          => $direction,

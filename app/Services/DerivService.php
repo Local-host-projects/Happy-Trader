@@ -5,21 +5,25 @@ namespace App\Services;
 use RuntimeException;
 use WebSocket\Client;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class DerivService
 {
     private Client $client;
 
-    public function __construct(private readonly string $apiKey) {}
+    public function __construct(private readonly ?string $apiKey) {}
 
     // ── Connection ────────────────────────────────────────────────────────
 
     public function connect(): void
     {
         $appId = config('deriv.app_id');
+        $endpoint = rtrim(config('deriv.endpoint', 'wss://ws.binaryws.com/websockets/v3'), '/');
+
+        $url = "{$endpoint}?app_id={$appId}";
 
         $this->client = new Client(
-            "wss://ws.binaryws.com/websockets/v3?app_id={$appId}",
+            $url,
             ['timeout' => 30]
         );
     }
@@ -28,21 +32,34 @@ class DerivService
     {
         // Public endpoint — market data only, no auth needed
         $appId = config('deriv.app_id');
+        $endpoint = rtrim(config('deriv.endpoint', 'wss://ws.binaryws.com/websockets/v3'), '/');
+        $url = "{$endpoint}?app_id={$appId}";
+
         $this->client = new Client(
-            "wss://ws.binaryws.com/websockets/v3?app_id={$appId}",
+            $url,
             ['timeout' => 30]
         );
     }
 
     public function disconnect(): void
     {
-        $this->client->close();
+        try {
+            $this->client->close();
+        } catch (\Throwable $e) {
+            // best-effort close
+            Log::debug('DerivService: error while disconnecting: ' . $e->getMessage());
+            error_log('[DerivService] disconnect error: ' . $e->getMessage());
+        }
     }
 
-    // ── Auth ─────────────────────────────────────────────────────────────
+    // ── Auth ────────────────────────────────────────────────────────────
 
     public function authorize(): array
     {
+        if (empty($this->apiKey)) {
+            throw new RuntimeException('Missing Deriv API key for authorize call.');
+        }
+
         return $this->send(['authorize' => $this->apiKey])['authorize'];
     }
 
@@ -71,6 +88,11 @@ class DerivService
     {
         $this->client->text(json_encode($payload));
         $raw      = $this->client->receive();
+
+        // Log raw response to both laravel log and stderr for easy debugging
+        Log::debug('Deriv WS RAW RESPONSE: ' . $raw);
+        error_log('[DerivService] RAW RESPONSE: ' . $raw);
+
         $response = json_decode($raw, true);
 
         if (json_last_error() !== JSON_ERROR_NONE) {
@@ -99,28 +121,32 @@ class DerivService
         ])['candles'];
     }
 
-    // ── Account ───────────────────────────────────────────────────────────
+    // ── Account ─────────────────────────────────────────────────────────
 
     public function getBalance(): array
     {
         return $this->send(['balance' => 1])['balance'];
     }
 
-    // ── Trading ───────────────────────────────────────────────────────────
+    // ── Trading ─────────────────────────────────────────────────────────
 
     public function getProposal(array $params): array
     {
-        return $this->send(
+        $resp = $this->send(
             array_merge(['proposal' => 1], $params)
-        )['proposal'];
+        );
+
+        return $resp['proposal'];
     }
 
     public function buy(string $proposalId, float $price): array
     {
-        return $this->send([
+        $resp = $this->send([
             'buy'   => $proposalId,
             'price' => $price,
-        ])['buy'];
+        ]);
+
+        return $resp['buy'];
     }
 
     public function getOpenContract(int $contractId): array

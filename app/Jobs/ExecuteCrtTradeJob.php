@@ -39,7 +39,14 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
 
         $params  = $this->user->parameters;
 
-        // DerivService — legacy, 1 argument
+        // Validate API key early — fail loudly and log
+        if (empty($this->user->deriv_api_key)) {
+            Log::error("CRT: missing deriv_api_key for user {$this->user->id}");
+            error_log("[CRT] missing deriv_api_key for user {$this->user->id}");
+            return;
+        }
+
+        // DerivService — legacy, 1 argument (now nullable but validated above)
         $service = new DerivService($this->user->deriv_api_key);
 
         try {
@@ -71,12 +78,14 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
 
             if ($todayLoss >= $dailyLossLimit) {
                 Log::info("CRT: daily loss limit reached for user {$this->user->id}");
+                error_log("[CRT] daily loss limit reached for user {$this->user->id}");
                 return;
             }
 
             // Step 3: Max concurrent trades
             if ($this->user->openTrades()->count() >= (int)($params->max_concurrent_trades ?? 2)) {
                 Log::info("CRT: max concurrent trades reached for user {$this->user->id}");
+                error_log("[CRT] max concurrent trades reached for user {$this->user->id}");
                 return;
             }
 
@@ -93,6 +102,7 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
 
             if (! $setup) {
                 Log::info("CRT: no valid setup for user {$this->user->id} at " . now());
+                error_log("[CRT] no valid setup for user {$this->user->id} at " . now());
                 return;
             }
 
@@ -121,8 +131,25 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
                 ],
             ]);
 
+            // Validate proposal shape
+            if (! isset($proposal['id']) || ! isset($proposal['ask_price'])) {
+                Log::error("CRT: invalid proposal for user {$this->user->id}", (array) $proposal);
+                error_log("[CRT] invalid proposal for user {$this->user->id}: " . json_encode($proposal));
+                return;
+            }
+
             // Step 9: Buy
             $buy = $service->buy($proposal['id'], (float) $proposal['ask_price']);
+
+            // Validate buy response and log
+            Log::debug('CRT BUY RESPONSE', (array) $buy);
+            error_log('[CRT] BUY RESPONSE: ' . json_encode($buy));
+
+            if (! isset($buy['contract_id'])) {
+                Log::error("CRT: buy did not return contract_id for user {$this->user->id}", (array) $buy);
+                error_log("[CRT] buy did not return contract_id for user {$this->user->id}: " . json_encode($buy));
+                return;
+            }
 
             // Step 10: Log
             TradeLogs::create([
@@ -149,11 +176,13 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
                 'contract_id' => $buy['contract_id'],
                 'rr_ratio'    => round($setup['rr_ratio'], 2),
             ]);
+            error_log("[CRT] trade placed for user {$this->user->id} contract_id={$buy['contract_id']} stake={$stake}");
 
         } catch (\Throwable $e) {
             Log::error("CRT: job failed for user {$this->user->id}: {$e->getMessage()}", [
                 'trace' => $e->getTraceAsString(),
             ]);
+            error_log("[CRT] job failed for user {$this->user->id}: {$e->getMessage()}");
             throw $e;
         } finally {
             $service->disconnect();
