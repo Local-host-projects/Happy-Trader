@@ -149,6 +149,38 @@ class CrtAnalyzer
             : 0;
     }
 
+    private function getReferenceRange(): array
+    {
+        $count    = count($this->candles);
+            $lookback = max(1, min(3, (int)($this->params->lookback_candles ?? 1)));
+
+                $highs     = [];
+                    $lows      = [];
+                        $bodySizes = [];
+                            $epoch     = null;
+
+                                for ($i = 1; $i <= $lookback; $i++) {
+                                        $c           = $this->candles[$count - 1 - $i];
+                                                $highs[]     = (float) $c['high'];
+                                                        $lows[]      = (float) $c['low'];
+                                                                $range       = (float) $c['high'] - (float) $c['low'];
+                                                                        $bodySizes[] = $range > 0
+                                                                                    ? abs((float) $c['open'] - (float) $c['close']) / $range * 100
+                                                                                                : 0;
+
+                                                                                                        if ($epoch === null) {
+                                                                                                                    $epoch = (int) $c['epoch'];
+                                                                                                                            }
+                                                                                                                                }
+
+                                                                                                                                    return [
+                                                                                                                                            'high'       => max($highs),
+                                                                                                                                                    'low'        => min($lows),
+                                                                                                                                                            'epoch'      => $epoch,
+                                                                                                                                                                    'body_ratio' => array_sum($bodySizes) / count($bodySizes),
+                                                                                                                                                                        ];
+                                                                                                                                                                        }
+
     // ── Simplified ADX ────────────────────────────────────────────────────
 
     private function calculateAdx(int $period): float
