@@ -2,11 +2,11 @@
 
 namespace Database\Seeders;
 
-use App\Models\AccountSnapshot;
-use App\Models\TradeLog;
-use App\Models\User;
 use Carbon\Carbon;
+use App\Models\User;
+use App\Models\TradeLogs;
 use Illuminate\Database\Seeder;
+use App\Models\AccountSnapshots;
 use Illuminate\Support\Facades\DB;
 
 class TradingDataSeeder extends Seeder
@@ -53,7 +53,7 @@ class TradingDataSeeder extends Seeder
                 $this->seedTrade($user, $tradeTime);
 
                 // Snapshot at every cycle
-                AccountSnapshot::create([
+                AccountSnapshots::create([
                     'user_id'           => $user->id,
                     'balance'           => round($this->balance, 2),
                     'equity'            => round($this->balance, 2),
@@ -123,7 +123,7 @@ class TradingDataSeeder extends Seeder
 
         $closedAt = $tradeTime->copy()->addMinutes(rand(15, 230));
 
-        TradeLog::create([
+        TradeLogs::create([
             'user_id'            => $user->id,
             'deriv_contract_id'  => rand(10000000, 99999999),
             'direction'          => $dir,
