@@ -99,7 +99,7 @@ class CrtAnalyzer
     $rrRatio = $tpDistance / $slDistance;
 
     // LOWERED: minimum R:R from 1.0 to 0.7
-    $minRR = (float) ($this->params->min_rr_ratio ?? 0.7);
+    $minRR = (float) ($this->params->min_rr_ratio ?? 0.0);
     if ($rrRatio < $minRR) {
         Log::debug('CrtAnalyzer: rrRatio too low', ['rr' => $rrRatio, 'min' => $minRR]);
         error_log('[CrtAnalyzer] rrRatio too low');
