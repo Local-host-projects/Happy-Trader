@@ -5,17 +5,17 @@ namespace App\Jobs;
 use Carbon\Carbon;
 use App\Models\User;
 use App\Models\TradeLogs;
+use App\Models\AccountSnapshots;
 use App\Services\CrtAnalyzer;
+use App\Services\DerivService;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
-use App\Services\DerivService;
-use App\Models\AccountSnapshots;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Queue\SerializesModels;
-use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
-use Illuminate\Contracts\Queue\ShouldBeUnique;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Log;
 
 class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
 {
@@ -37,44 +37,22 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
             return;
         }
 
-        $params  = $this->user->parameters;
+        $params = $this->user->parameters;
 
-        // Require either an API key or an OAuth token
-        if (empty($this->user->deriv_api_key) && empty($this->user->deriv_oauth_token)) {
-            Log::error("CRT: missing deriv_api_key and deriv_oauth_token for user {$this->user->id}");
-            error_log("[CRT] missing deriv credentials for user {$this->user->id}");
-            return;
-        }
-
-        // DerivService — create service (apiKey may be null when using OTP)
-        $service = new DerivService($this->user->deriv_api_key ?? null);
+        // Both args required — PAT for auth, account_id for OTP endpoint
+        $service = new DerivService(
+            $this->user->deriv_api_key,
+            $this->user->deriv_account_id,
+        );
 
         try {
-            // Prefer OTP flow when we have an OAuth token and an account id
-            $usedOtp = false;
-            if (! empty($this->user->deriv_oauth_token) && ! empty($this->user->deriv_account_id)) {
-                try {
-                    $otpUrl = DerivService::requestOtpUrl($this->user->deriv_account_id, $this->user->deriv_oauth_token);
-                    $service->connectWithOtpUrl($otpUrl);
-                    $usedOtp = true;
-                    Log::info("CRT: using OTP connection for user {$this->user->id}");
-                    error_log("[CRT] using OTP connection for user {$this->user->id}");
-                } catch (\Throwable $e) {
-                    Log::warning("CRT: OTP connection failed for user {$this->user->id}: {$e->getMessage()}");
-                    error_log("[CRT] OTP connection failed for user {$this->user->id}: {$e->getMessage()}");
-                    // fallback to legacy authorize flow below
-                }
-            }
+            // OTP → WebSocket — no authorize() call needed
+            $service->connect();
 
-            if (! $usedOtp) {
-                $service->connect();
-                $service->authorize();
-            }
-
-            // Get balance
+            // Balance
             $balance = $service->getBalance();
 
-            // Step 1: Snapshot
+            // Step 1 — Snapshot
             AccountSnapshots::create([
                 'user_id'           => $this->user->id,
                 'balance'           => (float) $balance['balance'],
@@ -84,91 +62,69 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
                 'captured_at'       => now(),
             ]);
 
-            // Step 2: Daily loss limit
-            $todayLoss = abs(
-                $this->user->todaysTrades()
-                    ->where('pnl', '<', 0)
-                    ->sum('pnl')
-            );
-            $dailyLossLimit = ((float)($params->daily_loss_limit_pct ?? 3) / 100)
-                            * (float) $balance['balance'];
+            // Step 2 — Daily loss limit guard
+            $todayLoss      = abs($this->user->todaysTrades()->where('pnl', '<', 0)->sum('pnl'));
+            $dailyLossLimit = ((float)($params->daily_loss_limit_pct ?? 3) / 100) * (float) $balance['balance'];
 
             if ($todayLoss >= $dailyLossLimit) {
                 Log::info("CRT: daily loss limit reached for user {$this->user->id}");
-                error_log("[CRT] daily loss limit reached for user {$this->user->id}");
                 return;
             }
 
-            // Step 3: Max concurrent trades
+            // Step 3 — Max concurrent trades guard
             if ($this->user->openTrades()->count() >= (int)($params->max_concurrent_trades ?? 2)) {
                 Log::info("CRT: max concurrent trades reached for user {$this->user->id}");
-                error_log("[CRT] max concurrent trades reached for user {$this->user->id}");
                 return;
             }
 
-            // Step 4: Candles — same connection is fine for legacy API
+            // Step 4 — Candles (same authenticated connection works for market data)
             $candles = $service->getCandles(
                 config('deriv.symbol'),
                 config('deriv.granularity'),
                 config('deriv.candle_count')
             );
 
-            // Step 5: Analyze
+            // Step 5 — CRT analysis
             $analyzer = new CrtAnalyzer($candles, $params);
             $setup    = $analyzer->analyze();
 
             if (! $setup) {
                 Log::info("CRT: no valid setup for user {$this->user->id} at " . now());
-                error_log("[CRT] no valid setup for user {$this->user->id} at " . now());
                 return;
             }
 
-            // Step 6: Stake
-            $balance_amount = (float) $balance['balance'];
+            // Step 6 — Stake
+            $accountBalance = (float) $balance['balance'];
             $stake          = max(1.00, round(
-                ((float)($params->risk_percent ?? 1) / 100) * $balance_amount, 2
+                ((float)($params->risk_percent ?? 1) / 100) * $accountBalance, 2
             ));
 
-            // Step 7: TP amount
-            $tp1Amount = round($stake * $setup['rr_ratio'], 2);
-
-            // Step 8: Proposal — no duration for multipliers
+            // Step 7 — TP dollar amount
+            $tp1Amount    = round($stake * $setup['rr_ratio'], 2);
             $contractType = $setup['direction'] === 'buy' ? 'MULTUP' : 'MULTDOWN';
 
+            // Step 8 — Proposal
+            // Confirmed format from official docs:
+            // duration_unit "s" without duration = open-ended multiplier contract
+            // multiplier 10 = safe default per docs example
             $proposal = $service->getProposal([
                 'amount'            => $stake,
                 'basis'             => 'stake',
                 'contract_type'     => $contractType,
                 'currency'          => $balance['currency'],
                 'underlying_symbol' => config('deriv.symbol'),
-                'multiplier'        => (int) config('deriv.multiplier', 100),
+                'multiplier'        => (int) config('deriv.multiplier', 10),
+                'duration_unit'     => 's',
                 'limit_order'       => [
                     'stop_loss'   => (float) $stake,
                     'take_profit' => (float) $tp1Amount,
                 ],
             ]);
 
-            // Validate proposal shape
-            if (! isset($proposal['id']) || ! isset($proposal['ask_price'])) {
-                Log::error("CRT: invalid proposal for user {$this->user->id}", (array) $proposal);
-                error_log("[CRT] invalid proposal for user {$this->user->id}: " . json_encode($proposal));
-                return;
-            }
-
-            // Step 9: Buy
+            // Step 9 — Buy
             $buy = $service->buy($proposal['id'], (float) $proposal['ask_price']);
 
-            // Validate buy response and log
-            Log::debug('CRT BUY RESPONSE', (array) $buy);
-            error_log('[CRT] BUY RESPONSE: ' . json_encode($buy));
-
-            if (! isset($buy['contract_id'])) {
-                Log::error("CRT: buy did not return contract_id for user {$this->user->id}", (array) $buy);
-                error_log("[CRT] buy did not return contract_id for user {$this->user->id}: " . json_encode($buy));
-                return;
-            }
-
-            // Step 10: Log
+            // Step 10 — Log
             TradeLogs::create([
                 'user_id'            => $this->user->id,
                 'deriv_contract_id'  => (int) $buy['contract_id'],
@@ -192,14 +148,13 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
                 'stake'       => $stake,
                 'contract_id' => $buy['contract_id'],
                 'rr_ratio'    => round($setup['rr_ratio'], 2),
+                'mode'        => $setup['strategy_mode'],
             ]);
-            error_log("[CRT] trade placed for user {$this->user->id} contract_id={$buy['contract_id']} stake={$stake}");
 
         } catch (\Throwable $e) {
             Log::error("CRT: job failed for user {$this->user->id}: {$e->getMessage()}", [
                 'trace' => $e->getTraceAsString(),
             ]);
-            error_log("[CRT] job failed for user {$this->user->id}: {$e->getMessage()}");
             throw $e;
         } finally {
             $service->disconnect();
