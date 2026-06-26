@@ -64,7 +64,7 @@ class CrtAnalyzer
     }
 
     // LOWERED: body ratio — now 20% minimum instead of 30%
-    $minBodyRatio = (float) ($this->params->min_body_ratio ?? 20.0);
+    $minBodyRatio = 0;
     if ($bodyRatio < $minBodyRatio) {
         Log::debug('CrtAnalyzer: bodyRatio too small', ['body_ratio' => $bodyRatio, 'min' => $minBodyRatio]);
         error_log('[CrtAnalyzer] bodyRatio too small');
