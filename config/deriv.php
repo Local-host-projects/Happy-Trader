@@ -6,5 +6,5 @@ return [
     'symbol'       => 'R_25',
     'granularity'  => 14400,
     'candle_count' => 20,
-    'multiplier'   => env('DERIV_MULTIPLIER', 10),
+    'multiplier' => env('DERIV_MULTIPLIER', 160),
 ];
