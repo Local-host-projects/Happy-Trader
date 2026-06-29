@@ -17,7 +17,7 @@ class MonitorOpenTradesJob implements ShouldQueue
 
     public function handle(): void
     {
-        $openTrades = TradeLog::open()
+        $openTrades = TradeLogs::open()
             ->whereNotNull('deriv_contract_id')
             ->with('user')
             ->get();
