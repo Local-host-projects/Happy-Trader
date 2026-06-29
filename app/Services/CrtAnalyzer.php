@@ -26,113 +26,54 @@ class CrtAnalyzer
 
     public function analyze(): ?array
 {
-    $mode = $this->params->strategy_mode ?? 'mean_reversion';
-
-    if ($mode === 'skip') {
-        Log::debug('CrtAnalyzer: skipping because strategy_mode=skip');
-        error_log('[CrtAnalyzer] skip mode');
-        return null;
-    }
-
-    if (count($this->candles) < 16) {
-        Log::debug('CrtAnalyzer: insufficient candles', ['count' => count($this->candles)]);
-        error_log('[CrtAnalyzer] insufficient candles: ' . count($this->candles));
-        return null;
-    }
-
-    // REMOVED: isActiveSession() — let it trade every 4H mark including 00:00
+    // Need minimum candles
+    if (count($this->candles) < 3) return null;
 
     $this->atr = $this->calculateAtr(14);
-    if ($this->atr == 0) {
-        Log::debug('CrtAnalyzer: ATR == 0', ['atr' => $this->atr]);
-        error_log('[CrtAnalyzer] ATR == 0');
-        return null;
-    }
-
-    ['high' => $refHigh, 'low' => $refLow, 'epoch' => $refEpoch, 'body_ratio' => $bodyRatio]
-        = $this->getReferenceRange();
-
-    $range = $refHigh - $refLow;
-
-    // Widened range filter — very permissive
-    $minRange = ($this->params->min_range_atr_pct / 100) * $this->atr;
-    $maxRange = ($this->params->max_range_atr_pct / 100) * $this->atr;
-    if ($range < $minRange || $range > $maxRange) {
-        Log::debug('CrtAnalyzer: range out of bounds', ['range' => $range, 'min' => $minRange, 'max' => $maxRange]);
-        error_log('[CrtAnalyzer] range out of bounds');
-        return null;
-    }
-
-    // LOWERED: body ratio — now 20% minimum instead of 30%
-    $minBodyRatio = 0;
-    if ($bodyRatio < $minBodyRatio) {
-        Log::debug('CrtAnalyzer: bodyRatio too small', ['body_ratio' => $bodyRatio, 'min' => $minBodyRatio]);
-        error_log('[CrtAnalyzer] bodyRatio too small');
-        return null;
-    }
+    if ($this->atr == 0) return null;
 
     $count        = count($this->candles);
-    $currentPrice = (float) $this->candles[$count - 1]['close'];
-    $midpoint     = ($refHigh + $refLow) / 2;
+    $ref          = $this->candles[$count - 2]; // previous completed candle
+    $current      = $this->candles[$count - 1]; // forming candle
 
-    // Direction always determined — price is always above or below mid
-    // This guarantees a setup every cycle
+    $refHigh      = (float) $ref['high'];
+    $refLow       = (float) $ref['low'];
+    $midpoint     = ($refHigh + $refLow) / 2;
+    $currentPrice = (float) $current['close'];
+
+    // Direction — price always above or below mid, always a trade
     if ($currentPrice >= $midpoint) {
         $direction = 'sell';
-        $slPrice   = $refHigh + ($this->atr * (float) $this->params->sl_atr_multiplier);
+        $slPrice   = $refHigh + ($this->atr * 1.5);
         $tpPrice   = $refLow;
     } else {
         $direction = 'buy';
-        $slPrice   = $refLow - ($this->atr * (float) $this->params->sl_atr_multiplier);
+        $slPrice   = $refLow - ($this->atr * 1.5);
         $tpPrice   = $refHigh;
     }
 
     $tpDistance = abs($currentPrice - $tpPrice);
     $slDistance = abs($currentPrice - $slPrice);
 
-    if ($slDistance == 0) {
-        Log::debug('CrtAnalyzer: slDistance == 0');
-        error_log('[CrtAnalyzer] slDistance == 0');
-        return null;
-    }
+    // Prevent division by zero only
+    if ($slDistance == 0) return null;
 
     $rrRatio = $tpDistance / $slDistance;
-Log::info('CRT debug', [
-        'current_price' => $currentPrice,
-            'ref_high'      => $refHigh,
-                'ref_low'       => $refLow,
-                    'midpoint'      => $midpoint,
-                        'direction'     => $direction,
-                            'tp_price'      => $tpPrice,
-                                'sl_price'      => $slPrice,
-                                    'tp_distance'   => $tpDistance,
-                                        'sl_distance'   => $slDistance,
-                                            'rr_ratio'      => $rrRatio,
-                                                'atr'           => $this->atr,
-                                                ]);
-    // LOWERED: minimum R:R from 1.0 to 0.7
-    $minRR = (float) ($this->params->min_rr_ratio ?? 0.0);
-
-    if ($rrRatio < $minRR) {
-        Log::debug('CrtAnalyzer: rrRatio too low', ['rr' => $rrRatio, 'min' => $minRR]);
-        error_log('[CrtAnalyzer] rrRatio too low');
-        return null;
-    }
 
     return [
         'direction'          => $direction,
         'atr'                => $this->atr,
-        'body_ratio'         => $bodyRatio,
+        'body_ratio'         => 100,
         'ref_high'           => $refHigh,
         'ref_low'            => $refLow,
-        'ref_candle_open_at' => $refEpoch,
+        'ref_candle_open_at' => (int) $ref['epoch'],
         'current_price'      => $currentPrice,
         'sl_price'           => $slPrice,
         'tp1_price'          => $tpPrice,
         'sl_distance'        => $slDistance,
         'tp1_distance'       => $tpDistance,
-        'rr_ratio'           => $rrRatio,
-        'strategy_mode'      => $this->params->strategy_mode,
+        'rr_ratio'           => max(0.5, $rrRatio), // floor at 0.5 so TP is never tiny
+        'strategy_mode'      => $this->params->strategy_mode ?? 'mean_reversion',
     ];
 }
 

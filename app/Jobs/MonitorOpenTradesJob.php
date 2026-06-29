@@ -3,13 +3,13 @@
 namespace App\Jobs;
 
 use App\Models\TradeLogs;
-use Illuminate\Bus\Queueable;
 use App\Services\DerivService;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Queue\SerializesModels;
-use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Log;
 
 class MonitorOpenTradesJob implements ShouldQueue
 {
@@ -17,19 +17,24 @@ class MonitorOpenTradesJob implements ShouldQueue
 
     public function handle(): void
     {
-        $openTrades = TradeLogs::open()
+        $openTrades = TradeLog::open()
             ->whereNotNull('deriv_contract_id')
             ->with('user')
             ->get();
 
+        if ($openTrades->isEmpty()) {
+            return;
+        }
+
+        Log::info("Monitor: checking {$openTrades->count()} open trades");
+
         foreach ($openTrades as $trade) {
-            $this->checkTrade($trade);
+            $this->checkAndClose($trade);
         }
     }
 
-    private function checkTrade(TradeLogs $trade): void
+    private function checkAndClose(TradeLogs $trade): void
     {
-        // Both args required for new DerivService
         $service = new DerivService(
             $trade->user->deriv_api_key,
             $trade->user->deriv_account_id,
@@ -38,30 +43,66 @@ class MonitorOpenTradesJob implements ShouldQueue
         try {
             $service->connect();
 
-            $contract = $service->getOpenContract($trade->deriv_contract_id);
+            // Get current contract status from Deriv
+            $contract = $service->getOpenContract(
+                (int) $trade->deriv_contract_id
+            );
 
-            // is_sold: 0 = still open, 1 = closed by SL/TP/stop-out/manual
-            if (! ($contract['is_sold'] ?? 0)) {
+            $isSold  = (bool) ($contract['is_sold'] ?? false);
+            $profit  = (float) ($contract['profit'] ?? 0);
+            $stake   = (float) $trade->lot_size;
+
+            // Case 1 — Deriv already closed it (SL/TP/stop-out hit automatically)
+            if ($isSold) {
+                $sellPrice = (float) ($contract['sell_price'] ?? 0);
+                $this->closeTradeInDb($trade, $profit, $sellPrice);
+                Log::info("Monitor: trade {$trade->id} auto-closed by Deriv", [
+                    'pnl' => $profit,
+                ]);
+                $service->disconnect();
                 return;
             }
 
-            // profit is a string in Deriv response — cast to float
-            $profit    = (float) ($contract['profit'] ?? 0);
-            $sellPrice = (float) ($contract['sell_price'] ?? 0);
-            $status    = $this->resolveStatus($profit);
+            // Case 2 — Still open, check if we should close it
+            $shouldClose = false;
+            $reason      = '';
 
-            $trade->update([
-                'status'      => $status,
-                'close_price' => $sellPrice ?: null,
-                'pnl'         => $profit,
-                'closed_at'   => now(),
-            ]);
+            // Close if profit >= take profit target (TP1 = 1.5x stake)
+            $tpTarget = $stake * 1.5;
+            if ($profit >= $tpTarget) {
+                $shouldClose = true;
+                $reason      = 'take_profit';
+            }
 
-            Log::info("Monitor: trade {$trade->id} closed", [
-                'status'     => $status,
-                'pnl'        => $profit,
-                'sell_price' => $sellPrice,
-            ]);
+            // Close if loss >= full stake (stop loss)
+            if ($profit <= -$stake) {
+                $shouldClose = true;
+                $reason      = 'stop_loss';
+            }
+
+            // Close if trade has been open more than 8 hours (2 candles)
+            $hoursOpen = $trade->opened_at
+                ? now()->diffInHours($trade->opened_at)
+                : 0;
+
+            if ($hoursOpen >= 8) {
+                $shouldClose = true;
+                $reason      = 'time_exit';
+            }
+
+            if ($shouldClose) {
+                // Actively sell the contract on Deriv
+                $sell      = $service->sell((int) $trade->deriv_contract_id, 0);
+                $soldFor   = (float) ($sell['sold_for'] ?? 0);
+                $finalPnl  = $soldFor - $stake;
+
+                $this->closeTradeInDb($trade, $finalPnl, $soldFor);
+
+                Log::info("Monitor: trade {$trade->id} closed — {$reason}", [
+                    'sold_for' => $soldFor,
+                    'pnl'      => $finalPnl,
+                ]);
+            }
 
         } catch (\Throwable $e) {
             Log::error("Monitor: failed on trade {$trade->id}: {$e->getMessage()}");
@@ -70,12 +111,22 @@ class MonitorOpenTradesJob implements ShouldQueue
         }
     }
 
-    private function resolveStatus(float $pnl): string
-    {
-        // Deriv marks all closed multiplier contracts as "sold"
-        // Outcome is determined purely by profit value
-        if ($pnl > 0) return 'tp1';
-        if ($pnl < 0) return 'sl';
-        return 'be';
+    private function closeTradeInDb(
+        TradeLogs $trade,
+        float    $profit,
+        float    $sellPrice
+    ): void {
+        $status = match(true) {
+            $profit >  0 => 'tp1',
+            $profit <  0 => 'sl',
+            default      => 'be',
+        };
+
+        $trade->update([
+            'status'      => $status,
+            'close_price' => $sellPrice ?: null,
+            'pnl'         => round($profit, 4),
+            'closed_at'   => now(),
+        ]);
     }
 }
