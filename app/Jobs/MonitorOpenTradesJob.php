@@ -2,7 +2,7 @@
 
 namespace App\Jobs;
 
-use App\Models\TradeLogs;
+use App\Models\TradeLog;
 use App\Services\DerivService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -17,7 +17,7 @@ class MonitorOpenTradesJob implements ShouldQueue
 
     public function handle(): void
     {
-        $openTrades = TradeLogs::open()
+        $openTrades = TradeLog::open()
             ->whereNotNull('deriv_contract_id')
             ->with('user')
             ->get();
@@ -29,7 +29,7 @@ class MonitorOpenTradesJob implements ShouldQueue
         }
     }
 
-    private function checkTrade(TradeLogs $trade): void
+    private function checkTrade(TradeLog $trade): void
     {
         $service = new DerivService(
             $trade->user->deriv_api_key,
