@@ -2,9 +2,9 @@
 
 namespace App\Services;
 
-use Illuminate\Support\Facades\Http;
 use RuntimeException;
 use WebSocket\Client;
+use Illuminate\Support\Facades\Http;
 
 class DerivService
 {
@@ -60,25 +60,27 @@ class DerivService
     // ── Core send/receive ─────────────────────────────────────────────────
 
     private function send(array $payload): array
-    {
-        $this->client->text(json_encode($payload));
-        $raw      = $this->client->receive();
-        $response = json_decode($raw, true);
+{
+    $this->client->text(json_encode($payload));
+    $raw      = $this->client->receive();
+    $response = json_decode($raw, true);
 
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            throw new RuntimeException(
-                'Deriv returned non-JSON: ' . substr($raw, 0, 200)
-            );
-        }
-
-        if (isset($response['error'])) {
-            throw new RuntimeException(
-                "[{$response['error']['code']}] {$response['error']['message']}"
-            );
-        }
-
-        return $response;
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        throw new RuntimeException('Deriv returned non-JSON: ' . substr($raw, 0, 300));
     }
+
+    if (isset($response['error'])) {
+        // Surface the EXACT Deriv error — code + message + what we sent
+        throw new RuntimeException(sprintf(
+            'DERIV_ERROR [%s]: %s | Request: %s',
+            $response['error']['code'] ?? 'unknown',
+            $response['error']['message'] ?? 'no message',
+            json_encode($payload)
+        ));
+    }
+
+    return $response;
+}
 
     // ── Account ───────────────────────────────────────────────────────────
 
