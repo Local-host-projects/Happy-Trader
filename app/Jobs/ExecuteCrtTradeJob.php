@@ -21,7 +21,7 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
 {
     use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public int $timeout = 120;
+    public int $timeout = 60;
     public int $tries   = 1;
 
     public function __construct(public readonly User $user) {}
@@ -37,22 +37,18 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
             return;
         }
 
-        $params = $this->user->parameters;
-
-        // Both args required — PAT for auth, account_id for OTP endpoint
+        $params  = $this->user->parameters;
         $service = new DerivService(
             $this->user->deriv_api_key,
             $this->user->deriv_account_id,
         );
 
         try {
-            // OTP → WebSocket — no authorize() call needed
             $service->connect();
 
-            // Balance
             $balance = $service->getBalance();
 
-            // Step 1 — Snapshot
+            // Snapshot
             AccountSnapshots::create([
                 'user_id'           => $this->user->id,
                 'balance'           => (float) $balance['balance'],
@@ -62,7 +58,7 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
                 'captured_at'       => now(),
             ]);
 
-            // Step 2 — Daily loss limit guard
+            // Daily loss limit guard
             $todayLoss      = abs($this->user->todaysTrades()->where('pnl', '<', 0)->sum('pnl'));
             $dailyLossLimit = ((float)($params->daily_loss_limit_pct ?? 3) / 100) * (float) $balance['balance'];
 
@@ -71,90 +67,79 @@ class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
                 return;
             }
 
-            // Step 3 — Max concurrent trades guard
+            // Max concurrent trades guard
             if ($this->user->openTrades()->count() >= (int)($params->max_concurrent_trades ?? 2)) {
-                Log::info("CRT: max concurrent trades reached for user {$this->user->id}");
+                Log::info("CRT: max concurrent trades for user {$this->user->id}");
                 return;
             }
 
-            // Step 4 — Candles (same authenticated connection works for market data)
-            $candles = $service->getCandles(
+            // Get raw ticks — NOT candles
+            $ticks = $service->getTicks(
                 config('deriv.symbol'),
-                config('deriv.granularity'),
-                config('deriv.candle_count')
+                config('deriv.tick_count', 60)
             );
 
-            // Step 5 — CRT analysis
-            $analyzer = new CrtAnalyzer($candles, $params);
+            // Analyze
+            $analyzer = new CrtAnalyzer($ticks, $params);
             $setup    = $analyzer->analyze();
 
             if (! $setup) {
-                Log::info("CRT: no valid setup for user {$this->user->id} at " . now());
+                Log::info("CRT: no setup for user {$this->user->id}");
                 return;
             }
 
-            // Step 6 — Stake
+            // Stake
             $accountBalance = (float) $balance['balance'];
             $stake          = max(1.00, round(
                 ((float)($params->risk_percent ?? 1) / 100) * $accountBalance, 2
             ));
 
-            // Step 7 — TP dollar amount
-            $tp1Amount    = round($stake * $setup['rr_ratio'], 2);
-            $contractType = $setup['direction'] === 'buy' ? 'MULTUP' : 'MULTDOWN';
+            // Contract type — CALL/PUT for scalping
+            $contractType = $setup['direction'] === 'buy' ? 'CALL' : 'PUT';
 
-            // Step 8 — Proposal
-            // Confirmed format from official docs:
-            // duration_unit "s" without duration = open-ended multiplier contract
-            // multiplier 10 = safe default per docs example
+            // Proposal — fixed duration, no barrier (at the money)
             $proposal = $service->getProposal([
                 'amount'            => $stake,
                 'basis'             => 'stake',
                 'contract_type'     => $contractType,
                 'currency'          => $balance['currency'],
+                'duration'          => (int) config('deriv.trade_duration', 60),
+                'duration_unit'     => config('deriv.duration_unit', 's'),
                 'underlying_symbol' => config('deriv.symbol'),
-                'multiplier'        => (int) config('deriv.multiplier', 10),
-                'duration_unit'     => 's',
-                'limit_order'       => [
-                    'stop_loss'   => (float) $stake,
-                    'take_profit' => (float) $tp1Amount,
-                ],
             ]);
 
-            // Step 9 — Buy
+            // Buy immediately on same connection — no delay
             $buy = $service->buy($proposal['id'], (float) $proposal['ask_price']);
 
-            // Step 10 — Log
+            // Log
             TradeLogs::create([
                 'user_id'            => $this->user->id,
                 'deriv_contract_id'  => (int) $buy['contract_id'],
                 'direction'          => $setup['direction'],
                 'lot_size'           => $stake,
                 'entry_price'        => $setup['current_price'],
-                'sl_price'           => round($setup['sl_price'], 5),
-                'tp1_price'          => round($setup['tp1_price'], 5),
+                'sl_price'           => 0,   // no manual SL on CALL/PUT
+                'tp1_price'          => 0,   // expires at set time
                 'tp2_price'          => null,
                 'status'             => 'open',
-                'ref_candle_open_at' => Carbon::createFromTimestamp($setup['ref_candle_open_at']),
-                'ref_candle_high'    => $setup['ref_high'],
-                'ref_candle_low'     => $setup['ref_low'],
-                'atr_at_entry'       => round($setup['atr'], 5),
+                'ref_candle_open_at' => now(),
+                'ref_candle_high'    => 0,
+                'ref_candle_low'     => 0,
+                'atr_at_entry'       => 0,
                 'opened_at'          => now(),
                 'created_at'         => now(),
             ]);
 
-            Log::info("CRT: trade placed for user {$this->user->id}", [
+            Log::info("CRT: scalp placed for user {$this->user->id}", [
                 'direction'   => $setup['direction'],
+                'contract'    => $contractType,
                 'stake'       => $stake,
                 'contract_id' => $buy['contract_id'],
-                'rr_ratio'    => round($setup['rr_ratio'], 2),
-                'mode'        => $setup['strategy_mode'],
+                'duration'    => config('deriv.trade_duration') . 's',
             ]);
 
         } catch (\Throwable $e) {
-            Log::error("CRT: job failed for user {$this->user->id}: {$e->getMessage()}", [
-                'trace' => $e->getTraceAsString(),
-            ]);
+            Log::error("CRT: failed for user {$this->user->id}: {$e->getMessage()}");
             throw $e;
         } finally {
             $service->disconnect();

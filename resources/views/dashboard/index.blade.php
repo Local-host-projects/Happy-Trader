@@ -5,6 +5,43 @@
 
 @section('content')
 
+{{-- Live R_25 Price --}}
+<div class="glass border border-white/[0.07] rounded-2xl px-5 py-4 mb-5 flex items-center justify-between flex-wrap gap-4">
+    <div class="flex items-center gap-4">
+        <div class="relative">
+            <div class="w-10 h-10 rounded-xl bg-white/[0.06] border border-white/[0.08] flex items-center justify-center shrink-0">
+                <i class="fa-solid fa-chart-line text-white/50"></i>
+            </div>
+            {{-- Live indicator dot --}}
+            <span class="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-emerald-400 border-2 border-noir animate-pulse" id="live-dot"></span>
+        </div>
+        <div>
+            <p class="text-[9px] font-mono text-white/25 tracking-widest uppercase mb-1">
+                Volatility 25 Index · R_25 · Live
+            </p>
+            <div class="flex items-baseline gap-3">
+                <span class="font-mono text-3xl font-bold text-white" id="live-price">—</span>
+                <span class="font-mono text-sm" id="live-change">
+                    <span id="live-arrow"></span>
+                    <span id="live-diff" class="text-white/30">—</span>
+                </span>
+            </div>
+            <p class="text-[10px] font-mono text-white/20 mt-0.5" id="live-time">Connecting...</p>
+        </div>
+    </div>
+    <div class="flex items-center gap-3">
+        <div class="text-right">
+            <p class="text-[9px] font-mono text-white/25 tracking-widest uppercase mb-1">Tick / 2s</p>
+            <p class="font-mono text-xs text-white/40" id="tick-count">0 ticks</p>
+        </div>
+        <div class="text-right">
+            <p class="text-[9px] font-mono text-white/25 tracking-widest uppercase mb-1">Status</p>
+            <span class="text-[9px] font-mono px-2 py-1 rounded-full border border-emerald-500/30 text-emerald-400 bg-emerald-500/10" id="ws-status">
+                CONNECTING
+            </span>
+        </div>
+    </div>
+</div>
 {{-- Stats grid --}}
 <div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-5">
 
@@ -289,5 +326,99 @@ async function refreshBalance() {
 
 // Load balance on page load
 refreshBalance();
+</script>
+<script>
+// ── Live R_25 Price via Deriv public WebSocket ──────────────────────────
+(function () {
+    const SYMBOL    = 'R_25';
+    const WS_URL    = 'wss://api.derivws.com/trading/v1/options/ws/public';
+    const APP_ID    = '{{ config("deriv.app_id") }}';
+
+    let ws          = null;
+    let lastPrice   = null;
+    let tickCount   = 0;
+    let reconnectMs = 3000;
+
+    function connect() {
+        ws = new WebSocket(WS_URL);
+
+        ws.onopen = function () {
+            document.getElementById('ws-status').textContent  = 'LIVE';
+            document.getElementById('ws-status').className    = 'text-[9px] font-mono px-2 py-1 rounded-full border border-emerald-500/30 text-emerald-400 bg-emerald-500/10';
+            document.getElementById('live-time').textContent  = 'Connected';
+
+            // Subscribe to tick stream
+            ws.send(JSON.stringify({ ticks: SYMBOL, subscribe: 1 }));
+            reconnectMs = 3000;
+        };
+
+        ws.onmessage = function (event) {
+            const data = JSON.parse(event.data);
+
+            if (data.tick) {
+                const price = parseFloat(data.tick.quote).toFixed(4);
+                const epoch = data.tick.epoch;
+                const time  = new Date(epoch * 1000).toUTCString().slice(17, 25) + ' UTC';
+
+                // Direction indicator
+                let arrow = '';
+                let cls   = 'text-white/30';
+
+                if (lastPrice !== null) {
+                    const diff = parseFloat(price) - parseFloat(lastPrice);
+                    if (diff > 0) {
+                        arrow = '▲ ';
+                        cls   = 'text-emerald-400';
+                    } else if (diff < 0) {
+                        arrow = '▼ ';
+                        cls   = 'text-rose-400';
+                    }
+                    document.getElementById('live-diff').textContent  = Math.abs(diff).toFixed(4);
+                    document.getElementById('live-diff').className    = cls;
+                    document.getElementById('live-arrow').textContent = arrow;
+                    document.getElementById('live-arrow').className   = cls;
+                }
+
+                document.getElementById('live-price').textContent = price;
+                document.getElementById('live-time').textContent  = time;
+                document.getElementById('tick-count').textContent = (++tickCount) + ' ticks';
+
+                // Flash effect on price update
+                const priceEl = document.getElementById('live-price');
+                priceEl.style.opacity = '0.5';
+                setTimeout(() => { priceEl.style.opacity = '1'; }, 100);
+
+                lastPrice = price;
+            }
+        };
+
+        ws.onerror = function () {
+            document.getElementById('ws-status').textContent = 'ERROR';
+            document.getElementById('ws-status').className   = 'text-[9px] font-mono px-2 py-1 rounded-full border border-rose-500/30 text-rose-400 bg-rose-500/10';
+            document.getElementById('live-dot').className    = 'absolute -top-1 -right-1 w-3 h-3 rounded-full bg-rose-400 border-2 border-noir';
+        };
+
+        ws.onclose = function () {
+            document.getElementById('ws-status').textContent = 'RECONNECTING';
+            document.getElementById('ws-status').className   = 'text-[9px] font-mono px-2 py-1 rounded-full border border-amber-500/30 text-amber-400 bg-amber-500/10';
+            document.getElementById('live-dot').className    = 'absolute -top-1 -right-1 w-3 h-3 rounded-full bg-amber-400 border-2 border-noir';
+
+            // Auto-reconnect with backoff
+            setTimeout(connect, reconnectMs);
+            reconnectMs = Math.min(reconnectMs * 1.5, 30000);
+        };
+    }
+
+    // Pause/resume when tab loses/gains focus to save connections
+    document.addEventListener('visibilitychange', function () {
+        if (document.hidden && ws) {
+            ws.close();
+        } else if (!document.hidden) {
+            connect();
+        }
+    });
+
+    connect();
+})();
 </script>
 @endpush

@@ -151,4 +151,19 @@ class DerivService
 
         return $response->json('data') ?? [];
     }
+    public function getTicks(string $symbol, int $count = 60): array
+{
+    $response = $this->send([
+        'ticks_history' => $symbol,
+        'end'           => 'latest',
+        'count'         => $count,
+        'style'         => 'ticks',  // raw ticks, not candles
+    ]);
+
+    return $response['history']['prices']
+        ? array_map(fn($p, $t) => ['price' => $p, 'time' => $t],
+            $response['history']['prices'],
+            $response['history']['times'])
+        : [];
+}
 }

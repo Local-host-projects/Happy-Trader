@@ -5,18 +5,17 @@ use App\Jobs\MonitorOpenTradesJob;
 use App\Jobs\RunAiParameterReviewJob;
 use Illuminate\Support\Facades\Schedule;
 
-// CRT bot fires every 4 hours
+// Scalping — fire every 5 minutes
 Schedule::job(new DispatchCrtTradesJob)
-    ->everyFourHours()
+    ->everyFiveMinutes()
     ->withoutOverlapping();
 
-// Monitor open trades every 15 minutes
+// Monitor — every 30 seconds to catch 60-second contract expiries
 Schedule::job(new MonitorOpenTradesJob)
-    ->everyFifteenMinutes()
+    ->everyThirtySeconds()
     ->withoutOverlapping();
 
-// AI parameter review runs once at end of day
-// Enough trades should be logged by 23:30 for a meaningful sample
+// AI review — still daily at 23:30
 Schedule::job(new RunAiParameterReviewJob)
     ->dailyAt('23:30')
     ->withoutOverlapping();
