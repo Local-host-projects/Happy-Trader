@@ -110,14 +110,17 @@ class DerivService
             array_merge(['proposal' => 1], $params)
         )['proposal'];
     }
-
+    public function getPortfolio(): array
+{
+    return $this->send(['portfolio' => 1])['portfolio']['contracts'] ?? [];
+}
     public function buy(string $proposalId, float $price): array
-    {
-        return $this->send([
-            'buy'   => $proposalId,
-            'price' => $price,
-        ])['buy'];
-    }
+{
+    return $this->send([
+        'buy'   => $proposalId,
+        'price' => $price,
+    ])['buy'];
+}
 
     public function getOpenContract(int $contractId): array
     {

@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\TradeController;
+use App\Http\Controllers\TradingController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ParameterController;
@@ -23,6 +24,8 @@ Route::middleware('auth')->group(function () {
 
     Route::put('/parameters',      [ParameterController::class, 'update'])->name('parameters.update');
     Route::post('/trading/toggle', [ParameterController::class, 'toggleTrading'])->name('trading.toggle');
+    Route::post('/trading/buy',      [TradingController::class, 'manualBuy'])->name('trading.buy');
+Route::get('/data/positions',    [TradingController::class, 'positions'])->name('data.positions');
 
     // JSON data endpoints consumed by JavaScript
     Route::get('/data/stats',     [DashboardController::class, 'stats'])->name('data.stats');

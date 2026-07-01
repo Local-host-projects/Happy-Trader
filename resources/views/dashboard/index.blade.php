@@ -90,6 +90,36 @@
         </a>
     </div>
 </div>
+{{-- Manual Trade Controls --}}
+<div class="glass border border-white/[0.07] rounded-2xl p-5 mb-5">
+    <div class="flex items-center justify-between mb-4">
+        <p class="text-xs font-mono text-white/40 tracking-widest uppercase">Manual trade · R_25 · 60s</p>
+        <span class="text-[10px] font-mono text-white/25" id="manual-status"></span>
+    </div>
+    <div class="grid grid-cols-2 gap-3">
+        <button onclick="placeTrade('buy')" id="btn-buy"
+            class="py-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-semibold text-sm
+                   hover:bg-emerald-500/20 active:scale-[0.98] transition-all flex items-center justify-center gap-2">
+            <i class="fa-solid fa-arrow-trend-up"></i> BUY
+        </button>
+        <button onclick="placeTrade('sell')" id="btn-sell"
+            class="py-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 font-semibold text-sm
+                   hover:bg-rose-500/20 active:scale-[0.98] transition-all flex items-center justify-center gap-2">
+            <i class="fa-solid fa-arrow-trend-down"></i> SELL
+        </button>
+    </div>
+</div>
+
+{{-- Live Positions Panel --}}
+<div class="glass border border-white/[0.07] rounded-2xl overflow-hidden mb-5">
+    <div class="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between">
+        <p class="text-xs font-mono text-white/40 tracking-widest uppercase">Live positions</p>
+        <span class="text-[10px] font-mono text-white/25" id="positions-count">0 open</span>
+    </div>
+    <div id="positions-list" class="p-5 flex flex-col gap-3">
+        <p class="text-[10px] font-mono text-white/20 text-center py-6 tracking-widest uppercase">No open positions</p>
+    </div>
+</div>
 
 {{-- Bot control + Chart --}}
 <div class="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-4 mb-5">
@@ -420,5 +450,166 @@ refreshBalance();
 
     connect();
 })();
+</script>
+<script>
+// ── Manual Buy/Sell ────────────────────────────────────────────────────
+async function placeTrade(direction) {
+    const buyBtn  = document.getElementById('btn-buy');
+    const sellBtn = document.getElementById('btn-sell');
+    const status  = document.getElementById('manual-status');
+
+    buyBtn.disabled  = true;
+    sellBtn.disabled = true;
+    buyBtn.classList.add('opacity-50');
+    sellBtn.classList.add('opacity-50');
+    status.textContent = 'Placing trade...';
+
+    try {
+        const res  = await fetch(window.routes.buy || '{{ route("trading.buy") }}', {
+            method: 'POST',
+            headers: { 'X-CSRF-TOKEN': window.csrfToken, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ direction }),
+        });
+        const data = await res.json();
+
+        if (data.error) {
+            status.textContent = data.error;
+            status.className   = 'text-[10px] font-mono text-rose-400';
+        } else {
+            status.textContent = `${direction.toUpperCase()} placed · $${data.stake}`;
+            status.className   = 'text-[10px] font-mono text-emerald-400';
+            loadPositions();
+        }
+    } catch (e) {
+        status.textContent = 'Trade failed — check connection';
+        status.className   = 'text-[10px] font-mono text-rose-400';
+    } finally {
+        buyBtn.disabled  = false;
+        sellBtn.disabled = false;
+        buyBtn.classList.remove('opacity-50');
+        sellBtn.classList.remove('opacity-50');
+        setTimeout(() => { status.textContent = ''; }, 4000);
+    }
+}
+
+// ── Live Positions Panel ──────────────────────────────────────────────
+let currentPositions = {};
+let livePriceMap     = {};
+
+async function loadPositions() {
+    try {
+        const data = await fetch('{{ route("data.positions") }}').then(r => r.json());
+
+        if (data.error) {
+            document.getElementById('positions-list').innerHTML =
+                `<p class="text-[10px] font-mono text-rose-400/60 text-center py-6">${data.error}</p>`;
+            return;
+        }
+
+        const previousIds = new Set(Object.keys(currentPositions));
+        const currentIds  = new Set(data.open.map(p => String(p.contract_id)));
+
+        // Detect contracts that disappeared — they closed since last poll
+        previousIds.forEach(id => {
+            if (!currentIds.has(id)) {
+                flashClose(currentPositions[id]);
+            }
+        });
+
+        currentPositions = {};
+        data.open.forEach(p => currentPositions[p.contract_id] = p);
+
+        renderPositions(data.open);
+        document.getElementById('positions-count').textContent = data.open.length + ' open';
+
+    } catch (e) {}
+}
+
+function renderPositions(positions) {
+    const container = document.getElementById('positions-list');
+
+    if (positions.length === 0) {
+        container.innerHTML = `<p class="text-[10px] font-mono text-white/20 text-center py-6 tracking-widest uppercase">No open positions</p>`;
+        return;
+    }
+
+    container.innerHTML = positions.map(p => {
+        const badgeCls  = p.direction === 'buy'
+            ? 'border-emerald-500/30 text-emerald-400 bg-emerald-500/10'
+            : 'border-rose-500/30 text-rose-400 bg-rose-500/10';
+        const profitCls = p.profit >= 0 ? 'text-emerald-400' : 'text-rose-400';
+
+        const secondsLeft = p.date_expiry
+            ? Math.max(0, Math.round(p.date_expiry - (Date.now() / 1000)))
+            : '—';
+
+        return `
+        <div class="flex items-center justify-between p-4 rounded-xl border border-white/[0.08] bg-white/[0.02]" data-contract-id="${p.contract_id}">
+            <div class="flex items-center gap-3">
+                <span class="text-[9px] font-mono px-2 py-0.5 rounded-full border ${badgeCls}">${p.direction.toUpperCase()}</span>
+                <div>
+                    <p class="text-xs font-mono text-white/70">Entry ${p.entry_price.toFixed(3)}</p>
+                    <p class="text-[10px] font-mono text-white/30">Now ${p.current_spot.toFixed(3)}</p>
+                </div>
+            </div>
+            <div class="text-right">
+                <p class="text-xs font-mono ${profitCls}">${p.profit >= 0 ? '+' : ''}$${p.profit.toFixed(2)}</p>
+                <p class="text-[10px] font-mono text-white/25">${secondsLeft}s left</p>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function flashClose(position) {
+    const el = document.querySelector(`[data-contract-id="${position.contract_id}"]`);
+    if (!el) return;
+
+    const won = position.profit > 0;
+    el.style.transition  = 'all 0.4s ease';
+    el.style.background  = won ? 'rgba(16,185,129,0.15)' : 'rgba(244,63,94,0.15)';
+    el.style.borderColor = won ? 'rgba(16,185,129,0.4)' : 'rgba(244,63,94,0.4)';
+
+    setTimeout(() => { if (el) el.style.opacity = '0'; }, 1200);
+}
+
+// ── Persistent live connection — public tick stream ──────────────────
+// Extends the existing price ticker to also feed the positions panel
+(function () {
+    const SYMBOL = 'R_25';
+    let ws       = null;
+    let reconnectMs = 3000;
+
+    function connect() {
+        ws = new WebSocket('wss://api.derivws.com/trading/v1/options/ws/public');
+
+        ws.onopen = function () {
+            ws.send(JSON.stringify({ ticks: SYMBOL, subscribe: 1 }));
+            reconnectMs = 3000;
+        };
+
+        ws.onmessage = function (event) {
+            const data = JSON.parse(event.data);
+            if (data.tick) {
+                const price = parseFloat(data.tick.quote);
+                livePriceMap.buy  = price;
+                livePriceMap.sell = price;
+                if (Object.keys(currentPositions).length > 0) {
+                    renderPositions(Object.values(currentPositions));
+                }
+            }
+        };
+
+        ws.onclose = function () {
+            setTimeout(connect, reconnectMs);
+            reconnectMs = Math.min(reconnectMs * 1.5, 30000);
+        };
+    }
+
+    connect();
+})();
+
+// Poll positions every 5 seconds — reflects MonitorOpenTradesJob closures
+loadPositions();
+setInterval(loadPositions, 5000);
 </script>
 @endpush

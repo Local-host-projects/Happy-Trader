@@ -4,17 +4,17 @@ namespace App\Jobs;
 
 use App\Models\User;
 use App\Models\TradeLogs;
+use App\Models\AccountSnapshots;
 use App\Services\CrtAnalyzer;
+use App\Services\DerivService;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
-use App\Services\DerivService;
-use App\Models\AccountSnapshots;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Queue\SerializesModels;
-use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
-use Illuminate\Contracts\Queue\ShouldBeUnique;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Log;
 
 class ExecuteCrtTradeJob implements ShouldQueue, ShouldBeUnique
 {
